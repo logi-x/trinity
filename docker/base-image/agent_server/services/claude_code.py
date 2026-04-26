@@ -686,8 +686,13 @@ async def execute_claude_code(prompt: str, stream: bool = False, model: Optional
                     f"[Chat] Outer timeout on session {execution_id} "
                     f"— killing process group as last resort"
                 )
-                _terminate_process_group(process, graceful_timeout=2, pgid=process_pgid)
-                _safe_close_pipes(process)
+                # _terminate_process_group does up to 4s of process.wait() (SIGTERM grace + SIGKILL grace);
+                # off-load to the executor so the event loop stays responsive while we tear down.
+                await loop.run_in_executor(
+                    None,
+                    lambda: _terminate_process_group(process, graceful_timeout=2, pgid=process_pgid),
+                )
+                await loop.run_in_executor(None, _safe_close_pipes, process)
                 raise HTTPException(
                     status_code=504,
                     detail=f"Chat execution timed out after {timeout_seconds} seconds"
@@ -1293,8 +1298,13 @@ async def execute_headless_task(
                     f"[Headless Task] Outer timeout on task {task_session_id} "
                     f"— killing process group as last resort"
                 )
-                _terminate_process_group(process, graceful_timeout=2, pgid=process_pgid)
-                _safe_close_pipes(process)
+                # _terminate_process_group does up to 4s of process.wait() (SIGTERM grace + SIGKILL grace);
+                # off-load to the executor so the event loop stays responsive while we tear down.
+                await loop.run_in_executor(
+                    None,
+                    lambda: _terminate_process_group(process, graceful_timeout=2, pgid=process_pgid),
+                )
+                await loop.run_in_executor(None, _safe_close_pipes, process)
                 raise HTTPException(
                     status_code=504,
                     detail=f"Task execution timed out after {timeout_seconds} seconds"
