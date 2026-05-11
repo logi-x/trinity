@@ -55,6 +55,20 @@ This repository has a remote counterpart running on Trinity (`trinity` agent) fo
 
 ---
 
+## Development Skills (`.claude` submodule)
+
+Skills, agents, and methodology guides live in the `.claude/` directory, which is a **git submodule** pointing to [abilityai/trinity-dev](https://github.com/Abilityai/trinity-dev) (private). This is where `/sprint`, `/cso`, `/autoplan`, `/implement`, `/review`, `/validate-pr`, etc. come from.
+
+### One-time setup after cloning
+```bash
+git submodule update --init --recursive
+git config submodule.recurse true  # auto-syncs .claude when switching branches
+```
+
+Without `submodule.recurse true`, switching branches will leave `.claude` stale and skills will disappear. The `fetchRecurseSubmodules = true` in `.gitmodules` handles `git pull` automatically, but branch switching requires the local config above.
+
+---
+
 ## SDLC
 
 All work follows a 4-stage lifecycle tracked via the **Trinity Roadmap** GitHub Project board:
