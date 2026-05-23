@@ -133,6 +133,9 @@ Follow methodology guides in `.claude/skills/`:
 ### 7. Architectural Invariants
 Before adding endpoints, services, DB tables, or frontend views, review the Architectural Invariants section in @docs/memory/architecture.md. Violations of these patterns will break the system. Run `/validate-architecture` weekly to catch drift. For decisions about new capabilities or significant design choices, also consult `docs/planning/TARGET_ARCHITECTURE.md` — prefer changes that move toward the target, reject changes that move away from it.
 
+### 8. Agent-Defined Pipelines (Trinity ≠ DAG engine)
+Long-running multi-stage work inside agents (perception → synthesis → publish → measure, etc.) is **owned by the agent**, not by Trinity. The agent runs a heartbeat skill that advances stages, retries failures, and escalates via the operator queue. Trinity's only contribution is a standardized **read surface** — agents publish `~/.trinity/pipelines/<id>.yaml` (definition) and `~/.trinity/pipeline-state/<id>/<instance>.json` (state); Trinity exposes these via thin MCP tools (`list_agent_pipelines`, `get_agent_pipeline_state`) that wrap the existing `agent_files` router. **Do not** add a DAG executor, pipeline state tables, or backend transition logic — those belong in the agent. See requirements §34 and issue #919.
+
 ---
 
 ## Memory Files

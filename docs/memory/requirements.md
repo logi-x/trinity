@@ -2310,6 +2310,57 @@ Standalone mobile-friendly admin page for managing agents on the go. Designed as
 
 ---
 
+## 34. Agent-Defined Pipelines (#919)
+
+### 34.1 Standardized Pipeline Introspection Surface (#919)
+- **Status**: 📋 Planned
+- **Implements**: Issue #919
+- **Description**: Trinity-compatible agents that run long-running
+  multi-stage pipelines (perception → incubation → synthesis → publish →
+  measure, or similar shapes) expose their pipeline state to Trinity
+  through two standardized read-only file paths inside the agent
+  container. Trinity stays a fleet orchestrator — it does **not** own
+  the DAG, the execution semantics, or the recovery policy. The agent
+  owns all of that via existing primitives (schedules CRUD, events,
+  operator queue, pre-check hook, `dashboard.yaml`). Trinity's only
+  contribution is making the agent's pipeline state uniformly
+  discoverable.
+- **File convention** (the canonical contract):
+  - `~/.trinity/pipelines/<pipeline_id>.yaml` — pipeline definition
+    (DAG, stages, transitions, preconditions, retry/escalation policy)
+  - `~/.trinity/pipeline-state/<pipeline_id>/<instance_id>.json` —
+    runtime state (current stage, attempt count, health, blockers,
+    open escalations, per-stage metrics)
+- **MCP tools** (thin file-reads via the existing `agent_files`
+  router — no new backend endpoints, no new DB tables, no parsing of
+  pipeline semantics in backend code):
+  - `list_agent_pipelines(agent_name)` — enumerates pipelines from
+    `~/.trinity/pipelines/*.yaml` with health summaries
+  - `get_agent_pipeline_state(agent_name, pipeline_id, instance_id?)`
+    — returns parsed state JSON; 404 (not 500) on missing pipeline
+    or instance
+- **Schemas**: `docs/schemas/agent-pipeline.schema.json` and
+  `docs/schemas/agent-pipeline-state.schema.json` define both files
+  authoritatively and are shipped alongside the
+  Trinity-Compatible Agent Guide.
+- **Operator-queue convention**: when an agent files an escalation
+  related to a pipeline, the queue item's `context` JSON includes
+  `{ pipeline_id, instance_id, stage }` so escalations group by
+  pipeline in the UI. No backend schema change — `operator_queue.context`
+  already accepts free-form JSON.
+- **Heartbeat skill (agent-side, not Trinity)**: the agent runs a
+  single `pipeline-tick` skill on a cron schedule that owns stage
+  advancement, retry, and escalation. The pre-check hook gates the
+  heartbeat so it's near-free when no pipeline needs attention. The
+  heartbeat is shipped by the `agent-dev:add-pipeline` plugin in
+  `abilityai/abilities`, not by Trinity.
+- **Out of scope**: DAG execution engine in backend; cross-agent DAGs
+  (expressed as event chains between independent per-agent pipelines);
+  GUI editor for `pipeline.yaml`; persisting pipeline state in
+  Trinity's database.
+
+---
+
 ## Out of Scope
 
 - Multi-tenant deployment (single org only)
