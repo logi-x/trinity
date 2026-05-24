@@ -201,6 +201,24 @@ If calls from Agent A to Agent B accumulate consecutive failures above a thresho
 
 Long-running workflows spanning multiple agents define a compensation action for each step. If step N fails, steps N-1 through 1 execute their compensations in reverse order. This prevents partial state corruption from stranded mid-workflow executions. Implemented at the orchestration layer — individual agents remain unaware.
 
+### Replica Groups for Horizontal Scale
+
+When a single container's `max_parallel_tasks` ceiling — bounded by container CPU, memory, and Claude Code concurrency — is below the throughput a capability needs, the agent is deployed as a **replica group**: N container instances backed by one logical agent identity.
+
+**Topology:**
+- `agent_ownership.replica_count` (default 1) controls the desired instance count; `replica_count = 1` preserves today's behavior exactly
+- One mailbox (Redis STREAM) per agent name — unchanged
+- Replicas join a Redis Streams consumer group `agent:{name}:processors` — provides at-most-once delivery across replicas, pending-entry tracking, and claim-on-consumer-death without inventing new platform machinery
+- Callers address the agent by name; the consumer group distributes messages. No caller-side dispatch logic. Schedules fire once into the mailbox per tick and exactly one replica drains each trigger.
+
+**Shared-state discipline (required before `replica_count > 1`):**
+- **Git repo writes**: single-writer election via Redis lock `agent:{name}:git_writer`; only the leader pushes, followers stay read-only
+- **Journal**: serialized through the platform projection path, not written from inside the container — N container writers never race on `journal.ndjson`
+- **Credentials and template files**: read-only after injection — safe to share by image across replicas
+- **Replica-safety**: declared in `template.yaml`. Agents that mutate `~/.trinity/` mid-turn, hold long-running in-memory state, or persist pipeline state in the container filesystem cannot opt into `replica_count > 1` without explicit design work.
+
+**Distinct from agent cloning:** cloning produces two siblings with divergent state and forces every caller to choose between them. Replica groups produce one logical agent with N processors and zero caller-side routing — one `agent_ownership` row, one credential set, one schedule list, one row in the fleet view.
+
 ---
 
 ## Agent Runtime
@@ -424,6 +442,8 @@ These are architectural decisions not yet resolved. They should be answered befo
 3. **GuardAgent evaluation**: How does the GuardAgent evaluate output quality? Rule-based (regexes, schema validation) is implementable today. LLM-based evaluation (semantic quality scoring) is more powerful but adds latency and cost. The boundary between them needs a design decision.
 
 4. **Celery vs. APScheduler+Redis**: Celery adds operational surface (worker processes, task routing, retry configuration). Is the distributed redundancy benefit worth it for operators running single-node deployments? The alternative is APScheduler backed by a PostgreSQL job store, which gives persistence without the full Celery stack. Decision should be made before the scheduler migration is planned.
+
+5. **Replica-group coordination (issue #927)**: the single-writer election for git pushes, the journal-projection serialization path, and the `template.yaml` schema for declaring replica-safety all need design before `replica_count > 1` is exposed. Container autoscaling (vs. operator-set replica counts) is explicitly out of scope until real load patterns justify it.
 
 ---
 
