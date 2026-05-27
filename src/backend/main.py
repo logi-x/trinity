@@ -853,6 +853,40 @@ app.include_router(webhooks_router)  # Webhook Triggers (WEBHOOK-001, #291)
 app.include_router(ws_tickets_router)  # WebSocket auth tickets (#550)
 
 
+# #847 Phase 0 — Enterprise modules (closed-source companion submodule
+# at `src/backend/enterprise/`, repo `Abilityai/trinity-enterprise`).
+# The submodule is OPTIONAL: customers running the public repo without
+# enterprise access clone without it, and the ImportError below silently
+# no-ops. When mounted, `register_enterprise(app)` installs the SSO /
+# SCIM / SIEM routers under `/api/enterprise/*`. The function is
+# idempotent (guards on `app.state.enterprise_registered`). Entitlement
+# gating happens per-endpoint via `requires_entitlement(feature_id)`
+# from `dependencies.py` — endpoints are mounted unconditionally and
+# the gate decides whether to serve them. This keeps the wiring
+# deterministic regardless of license state.
+#
+# Import path is `enterprise.backend.register_enterprise`: the private
+# repo is restructured into `backend/` and `frontend/` subdirs so the
+# same repo can be dual-mounted (`src/backend/enterprise/` for Python,
+# `src/frontend/src/enterprise/` for Vite). See
+# `docs/planning/ENTERPRISE_ARCHITECTURE.md` for rationale.
+try:
+    from enterprise.backend import register_enterprise  # type: ignore[import-not-found]
+    register_enterprise(app)
+    # `print(..., flush=True)`: this import block runs at module init,
+    # which is BEFORE `lifespan` calls `setup_logging()`. The default
+    # Python logger drops INFO-level records, so `logger.info` here
+    # would be silently swallowed. Print to stdout instead — docker
+    # logs captures it for ops + the CI workflow greps for it.
+    print("Trinity Enterprise modules registered", flush=True)
+except ImportError:
+    print(
+        "Trinity Enterprise submodule not present — OSS-only build "
+        "(this is normal; enterprise modules are an optional private submodule)",
+        flush=True,
+    )
+
+
 # WebSocket endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(
