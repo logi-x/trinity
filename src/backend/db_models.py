@@ -113,7 +113,10 @@ class ScheduleCreate(BaseModel):
     enabled: bool = True
     timezone: str = "UTC"
     description: Optional[str] = None
-    timeout_seconds: int = 900  # Default 15 minutes
+    # #913: None means "use the agent's `execution_timeout_seconds`". Storing
+    # NULL is what makes per-agent timeout actually effective for scheduled
+    # runs — the old default of 900 silently masked PUT /api/agents/{name}/timeout.
+    timeout_seconds: Optional[int] = None
     allowed_tools: Optional[List[str]] = None  # None = all tools allowed
     model: Optional[str] = None  # Model override (MODEL-001). None = agent default
     # Retry configuration (RETRY-001)
@@ -143,7 +146,8 @@ class Schedule(BaseModel):
     updated_at: datetime
     last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None
-    timeout_seconds: int = 900  # Default 15 minutes
+    # #913: NULL = inherit from agent_ownership.execution_timeout_seconds.
+    timeout_seconds: Optional[int] = None
     allowed_tools: Optional[List[str]] = None  # None = all tools allowed
     model: Optional[str] = None  # Model override (MODEL-001). None = agent default
     # Retry configuration (RETRY-001). 0 = disabled (default, #476), 1-5 opt-in.
@@ -153,6 +157,11 @@ class Schedule(BaseModel):
     validation_enabled: bool = False  # Enable post-execution validation
     validation_prompt: Optional[str] = None  # Custom auditor instructions (None = default prompt)
     validation_timeout_seconds: int = 120  # Timeout for validation task (30-600 range)
+    # Webhook trigger (WEBHOOK-001 / #647 follow-up): the DB column exists and
+    # is read by `webhooks.py:trigger_webhook`, but the pydantic model never
+    # carried these fields — every webhook trigger raised AttributeError.
+    webhook_enabled: bool = False
+    webhook_token: Optional[str] = None
 
 
 class ScheduleExecution(BaseModel):
@@ -202,6 +211,9 @@ class ScheduleExecution(BaseModel):
     validates_execution_id: Optional[str] = None   # FK to execution being validated (for validation records)
     # Auto-compact observability (Bundle B)
     compact_metadata: Optional[str] = None       # JSON list of compact events fired during this turn
+    # Reader-race auto-retry (#678): how many times this execution was retried in-line
+    # by the backend HTTPError handler. 0 = never retried; 1 = retried once (cap).
+    retry_count: int = 0
 
 
 # =========================================================================
@@ -411,7 +423,7 @@ class PublicLinkCreate(BaseModel):
     """
     name: Optional[str] = None  # Friendly name for the link
     expires_at: Optional[str] = None  # ISO timestamp for expiration
-    link_type: str = "chat"  # 'chat' or 'site' (SITE-001)
+    link_type: str = "chat"  # currently only 'chat' is supported
 
 
 class PublicLinkUpdate(BaseModel):
@@ -431,7 +443,7 @@ class PublicLink(BaseModel):
     expires_at: Optional[datetime] = None
     enabled: bool = True
     name: Optional[str] = None
-    link_type: str = "chat"  # 'chat' or 'site' (SITE-001)
+    link_type: str = "chat"
 
 
 class PublicLinkWithUrl(PublicLink):

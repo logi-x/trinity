@@ -6,6 +6,14 @@ This file provides guidance to Claude Code when working with this repository.
 
 ---
 
+## Current Product Focus
+
+**Primary theme**: Reliability · **Secondary theme**: UI/UX
+
+When picking tickets, prefer items whose Theme matches the current focus. Within the same Tier and Rank, Reliability beats UI/UX beats everything else. Items in other themes are not deprioritized — they're picked only after focus items at that tier are exhausted.
+
+---
+
 ## ⚠️ PUBLIC OPEN SOURCE REPOSITORY
 
 **This is a PUBLIC open-source repository visible to the entire world.**
@@ -55,6 +63,20 @@ This repository has a remote counterpart running on Trinity (`trinity` agent) fo
 
 ---
 
+## Development Skills (`.claude` submodule)
+
+Skills, agents, and methodology guides live in the `.claude/` directory, which is a **git submodule** pointing to [abilityai/trinity-dev](https://github.com/Abilityai/trinity-dev) (private). This is where `/sprint`, `/cso`, `/autoplan`, `/implement`, `/review`, `/validate-pr`, etc. come from.
+
+### One-time setup after cloning
+```bash
+git submodule update --init --recursive
+git config submodule.recurse true  # auto-syncs .claude when switching branches
+```
+
+Without `submodule.recurse true`, switching branches will leave `.claude` stale and skills will disappear. The `fetchRecurseSubmodules = true` in `.gitmodules` handles `git pull` automatically, but branch switching requires the local config above.
+
+---
+
 ## SDLC
 
 All work follows a 4-stage lifecycle tracked via the **Trinity Roadmap** GitHub Project board:
@@ -68,7 +90,7 @@ All work follows a 4-stage lifecycle tracked via the **Trinity Roadmap** GitHub 
 - **Review**: PR opened, `/validate-pr` passes, code review approved
 - **Done**: PR squash-merged, issue closed
 
-**Full details**: `docs/DEVELOPMENT_WORKFLOW.md`
+**Full details**: `.claude/DEVELOPMENT_WORKFLOW.md`
 
 ---
 
@@ -117,7 +139,10 @@ Follow methodology guides in `.claude/skills/`:
 | `code-review` | Verify feedback technically before implementing |
 
 ### 7. Architectural Invariants
-Before adding endpoints, services, DB tables, or frontend views, review the Architectural Invariants section in @docs/memory/architecture.md. Violations of these patterns will break the system. Run `/validate-architecture` weekly to catch drift.
+Before adding endpoints, services, DB tables, or frontend views, review the Architectural Invariants section in @docs/memory/architecture.md. Violations of these patterns will break the system. Run `/validate-architecture` weekly to catch drift. For decisions about new capabilities or significant design choices, also consult `docs/planning/TARGET_ARCHITECTURE.md` — prefer changes that move toward the target, reject changes that move away from it.
+
+### 8. Agent-Defined Pipelines (Trinity ≠ DAG engine)
+Long-running multi-stage work inside agents (perception → synthesis → publish → measure, etc.) is **owned by the agent**, not by Trinity. The agent runs a heartbeat skill that advances stages, retries failures, and escalates via the operator queue. Trinity's only contribution is a standardized **read surface** — agents publish `~/.trinity/pipelines/<id>.yaml` (definition) and `~/.trinity/pipeline-state/<id>/<instance>.json` (state); Trinity exposes these via thin MCP tools (`list_agent_pipelines`, `get_agent_pipeline_state`) that wrap the existing `agent_files` router. **Do not** add a DAG executor, pipeline state tables, or backend transition logic — those belong in the agent. See requirements §34 and issue #919.
 
 ---
 
@@ -126,7 +151,8 @@ Before adding endpoints, services, DB tables, or frontend views, review the Arch
 | File | Purpose |
 |------|---------|
 | `docs/memory/requirements.md` | **SINGLE SOURCE OF TRUTH** - All features |
-| @docs/memory/architecture.md | Current system design (~1000 lines max) |
+| @docs/memory/architecture.md | **Current system design** — describes what is built today (~1000 lines max) |
+| `docs/planning/TARGET_ARCHITECTURE.md` | **Target system design** — describes the optimal destination; use when evaluating tradeoffs and prioritizing work |
 | `docs/memory/feature-flows.md` | Index of vertical slice docs |
 | `docs/planning/ORCHESTRATION_RELIABILITY_2026-04.md` | Active multi-sprint plan for execution/orchestration reliability. **Current focus: Tier 2.5 Simplification — #306 (push event bus) → #428/#429/#430.** Consult before touching `task_execution_service`, `slot_service`, `backlog_service`, `execution_queue`, or `cleanup_service`. |
 | GitHub Issues + Project Board | Prioritized task queue — **Trinity Roadmap** board (Todo/In Progress/Done), priority labels (P0-P3), Tier sub-priority (P1a/P1b/P1c) |
@@ -313,7 +339,7 @@ The **[abilities](https://github.com/abilityai/abilities)** repo is the canonica
 
 ## See Also
 
-- **SDLC & Development Workflow**: `docs/DEVELOPMENT_WORKFLOW.md` ← Start here for dev process
+- **SDLC & Development Workflow**: `.claude/DEVELOPMENT_WORKFLOW.md` ← Start here for dev process
 - **Orchestration Reliability Plan**: `docs/planning/ORCHESTRATION_RELIABILITY_2026-04.md` ← Active direction for execution stack; read before extending orchestration primitives
 - **Full Architecture**: @docs/memory/architecture.md
 - **All Requirements**: `.claude/memory/requirements.md`

@@ -4,7 +4,7 @@ Database migrations for Trinity platform.
 Each migration function handles a specific schema change.
 Migrations are idempotent - safe to run multiple times.
 
-Migration Order (as of 2026-02-28):
+Migration Order (as of 2026-05-07):
 1. agent_sharing - Email-based sharing (from user_id)
 2. schedule_executions_observability - Context/cost/tools columns
 3. mcp_api_keys_agent_scope - Agent collaboration support
@@ -34,10 +34,36 @@ Migration Order (as of 2026-02-28):
 27. agent_ownership_execution_timeout - TIMEOUT-001 per-agent execution timeout
 28. public_user_memory_table - MEM-001 per-user persistent memory for public link agents
 29. subscription_rate_limit_tracking - SUB-003 rate-limit event tracking for auto-switch
-30. execution_fan_out_id - FANOUT-001 fan-out operation linkage
-31. scheduler_retry_support - RETRY-001 scheduler retry mechanism
-32. validation_support - VALIDATE-001 post-execution business validation
-33. agent_git_config_pat - #347 per-agent GitHub PAT support
+30. chat_messages_source_column - Chat message source tracking
+31. agent_ownership_voice_prompt - Per-agent voice system prompt
+32. slack_channel_agents - SLACK-002 channel-agent bindings
+33. execution_fan_out_id - FANOUT-001 fan-out operation linkage
+34. telegram_bindings - TELEGRAM-001 Telegram bot integration tables
+35. subscription_usage_tracking - SUB-002 usage tracking columns
+36. telegram_group_configs - TGRAM-GROUP Telegram group chat configs
+37. access_control - #311 unified channel access control (access_requests, verified_email)
+38. public_link_require_email_unified - #311 unified require_email flag on public links
+39. email_whitelist_default_role - #314 default role on email whitelist rows
+40. backlog_support - BACKLOG-001 persistent FIFO overflow store
+41. scheduler_retry_support - RETRY-001 scheduler retry mechanism
+42. validation_support - VALIDATE-001 post-execution business validation
+43. audit_log_table - SEC-001 / #20 platform audit log
+44. group_auth_mode - Telegram/Slack group auth mode
+45. agent_ownership_guardrails - GUARD-001 per-agent guardrails overrides
+46. agent_git_config_pat - #347 per-agent GitHub PAT support
+47. proactive_messaging - #321 proactive agent-to-user messaging
+48. agent_git_config_branch_ownership - Working-branch ownership tracking
+49. sync_health - #389 agent_sync_state for sync health observability
+50. whatsapp_bindings - WHATSAPP-001 Twilio WhatsApp integration
+51. agent_schedules_webhook - WEBHOOK-001 webhook tokens for schedules
+52. agent_shared_files - FILES-001 outbound file sharing
+53. agent_sessions_tables - SESSION_TAB --resume-default Session tab
+54. session_compact_events - Session compact event tracking
+55. public_links_type - SITE-001 type column on public links (chat | site)
+56. slack_bot_token_encryption - #453 encrypt Slack bot tokens at rest
+57. canary_violations_table - CANARY-001 / Issue #411 invariant harness violations
+58. execution_retention_index - #772 partial index on schedule_executions(completed_at)
+59. execution_retry_count - #678 retry_count column for reader-race auto-retry
 """
 import logging
 import sqlite3
@@ -1870,6 +1896,293 @@ def _migrate_public_links_type(cursor, conn):
     conn.commit()
 
 
+def _migrate_slack_bot_token_encryption(cursor, conn):
+    """Encrypt plaintext Slack bot tokens at rest (#453).
+
+    Walks `slack_link_connections.slack_bot_token` and `slack_workspaces.bot_token`
+    once. For each row whose value starts with `xoxb-` (real Slack bot tokens
+    always do), re-encrypt in place via `CredentialEncryptionService` (AES-256-GCM,
+    JSON envelope) — same primitive Telegram and WhatsApp bindings already use.
+
+    Idempotent at row level: rows that are already JSON envelopes are skipped.
+    Idempotent at migration level: the runner tracks applied migrations in
+    `schema_migrations` and won't re-run this on subsequent restarts.
+
+    Hard-fail on missing CREDENTIAL_ENCRYPTION_KEY: matches the pattern already
+    used by subscription_credentials, nevermined_agent_config, and the channel
+    encryption helpers in db/{telegram,whatsapp,slack}_channels.py. The key MUST
+    be set before this migration runs; otherwise the backend won't start.
+
+    Background context: `slack_workspaces.bot_token` was rolled out with lazy
+    encryption (encrypt-on-write + plaintext-fallback-on-read at
+    `slack_channels.py:47-49`). That left two sources of plaintext on disk:
+    rows written before the encryption rollout, and rows copied from the
+    legacy `slack_link_connections` table by `_migrate_slack_channel_agents`.
+    This one-shot pass closes both gaps. See project memory
+    `project_453_slack_encryption.md` for full background.
+    """
+    from services.credential_encryption import CredentialEncryptionService
+    encryption = CredentialEncryptionService()  # raises ValueError if key unset
+
+    def _encrypt_table(table_name: str, token_column: str) -> tuple[int, int]:
+        """Returns (encrypted_count, skipped_count). Skips rows that already
+        look like JSON envelopes (the xoxb-* prefix is the only signal we
+        trust for "this is plaintext that needs encrypting").
+        """
+        # Defensive: skip if the table doesn't exist on this DB
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        )
+        if not cursor.fetchone():
+            logger.info(f"#453 migration: table {table_name} not present, skipping")
+            return (0, 0)
+
+        cursor.execute(f"SELECT id, {token_column} FROM {table_name}")
+        rows = cursor.fetchall()
+        encrypted, skipped = 0, 0
+        for row_id, value in rows:
+            if not value or not value.startswith("xoxb-"):
+                # Already encrypted (JSON envelope) or NULL — leave alone
+                skipped += 1
+                continue
+            envelope = encryption.encrypt({"bot_token": value})
+            cursor.execute(
+                f"UPDATE {table_name} SET {token_column} = ? WHERE id = ?",
+                (envelope, row_id),
+            )
+            encrypted += 1
+        return (encrypted, skipped)
+
+    link_enc, link_skip = _encrypt_table("slack_link_connections", "slack_bot_token")
+    ws_enc, ws_skip = _encrypt_table("slack_workspaces", "bot_token")
+
+    if link_enc or ws_enc:
+        logger.info(
+            f"#453 migration: encrypted {link_enc} slack_link_connections rows + "
+            f"{ws_enc} slack_workspaces rows (skipped {link_skip + ws_skip} already-encrypted)"
+        )
+    else:
+        logger.info(
+            f"#453 migration: nothing to encrypt — all {link_skip + ws_skip} rows "
+            f"already encrypted (or empty tables)"
+        )
+    conn.commit()
+
+
+def _migrate_canary_violations_table(cursor, conn):
+    """Create canary_violations table + indexes (CANARY-001 / Issue #411 — Phase 1).
+
+    Stores orchestration-invariant violations recorded by the continuous
+    canary harness. Schema is also defined in db/schema.py for fresh
+    installs; this migration handles existing installs.
+    """
+    cursor.execute("PRAGMA table_info(canary_violations)")
+    if cursor.fetchall():
+        return  # already created (fresh-install path via init_schema)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS canary_violations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invariant_id TEXT NOT NULL,
+            tier TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            snapshot_time TEXT NOT NULL,
+            observed_state TEXT NOT NULL,
+            signal_query TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+    for ddl in [
+        "CREATE INDEX IF NOT EXISTS idx_canary_violations_invariant "
+        "ON canary_violations(invariant_id, snapshot_time DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_canary_violations_severity "
+        "ON canary_violations(severity, snapshot_time DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_canary_violations_snapshot "
+        "ON canary_violations(snapshot_time DESC)",
+    ]:
+        cursor.execute(ddl)
+
+    conn.commit()
+    print("Created canary_violations table with indexes (CANARY-001)")
+
+
+def _migrate_execution_retry_count(cursor, conn):
+    """Issue #678: track auto-retry attempts on schedule_executions.
+
+    Backend's HTTPError handler detects the reader-race signature and
+    retries once with the same execution_id (cap at 1). The column lets
+    operators distinguish first-attempt failures from auto-retry outcomes
+    and is surfaced through the `get_execution_result` MCP tool so callers
+    can see when an implicit retry fired.
+    """
+    _safe_add_column(
+        cursor,
+        "schedule_executions",
+        "retry_count",
+        "ALTER TABLE schedule_executions ADD COLUMN retry_count INTEGER DEFAULT 0",
+        log_msg="Issue #678: adding retry_count to schedule_executions",
+    )
+    conn.commit()
+
+
+def _migrate_execution_retention_index(cursor, conn):
+    """Issue #772: partial index on schedule_executions(completed_at) for terminal rows.
+
+    Drives the execution_log null sweep and the row-delete sweep in
+    cleanup_service. Partial predicate matches the WHERE clause of both sweeps
+    so the planner uses an index range scan rather than a table scan.
+    Idempotent: CREATE INDEX IF NOT EXISTS.
+    """
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_executions_completed_terminal "
+        "ON schedule_executions(completed_at) "
+        "WHERE status IN ('completed', 'failed', 'terminated')"
+    )
+    conn.commit()
+
+
+def _migrate_fix_retention_index_status_values(cursor, conn):
+    """Issue #862: fix idx_executions_completed_terminal to use correct status values.
+
+    The original migration (_migrate_execution_retention_index, #772) created
+    the partial index with status IN ('completed', 'failed', 'terminated'), but
+    TaskExecutionStatus uses 'success', 'failed', 'cancelled', 'skipped'.
+    Only 'failed' rows were ever in the index — 'success' rows (99%+) were
+    silently excluded, causing the execution_log and row-delete sweeps to
+    report 0 pruned rows on every cycle despite eligible rows accumulating.
+
+    Fix: drop the wrong index and recreate with the correct status set.
+    CREATE INDEX IF NOT EXISTS alone would be a no-op on existing installs
+    because the index already exists (with wrong predicate).
+    """
+    cursor.execute("DROP INDEX IF EXISTS idx_executions_completed_terminal")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_executions_completed_terminal "
+        "ON schedule_executions(completed_at) "
+        "WHERE status IN ('success', 'failed', 'cancelled', 'skipped')"
+    )
+    conn.commit()
+
+
+def _migrate_null_legacy_schedule_timeouts(cursor, conn):
+    """Issue #913: NULL out legacy default schedule timeouts so the
+    per-agent value actually takes effect.
+
+    Before #913, `agent_schedules.timeout_seconds` was always populated
+    (DEFAULT 900, later rewritten to 3600 by
+    `_migrate_default_execution_timeout_to_3600`). The scheduler passed
+    that value directly to `/api/internal/execute-task`, which meant the
+    backend's per-agent fallback at `task_execution_service.py:281` was
+    dead code on the scheduler path — and `PUT /api/agents/{name}/timeout`
+    was silently ineffective for scheduled runs.
+
+    The fix at the code layer is to round-trip None through the scheduler
+    so the backend's per-agent fallback fires. But existing rows still
+    carry a concrete 900/3600 value that came from the platform default,
+    not from an operator choice — so the canary harness keeps firing S-03
+    (slot TTL below per-agent floor) and E-01 (terminal-state closure)
+    until those rows are cleared.
+
+    We null out only rows whose value matches one of the historical
+    defaults (900, 3600). Operators who explicitly set a different value
+    are untouched. Same fidelity tradeoff as
+    `_migrate_default_execution_timeout_to_3600` — accepted there for
+    #665, accepted here for #913.
+
+    Idempotent: subsequent runs find no matching rows and no-op.
+    """
+    cursor.execute(
+        "UPDATE agent_schedules SET timeout_seconds = NULL "
+        "WHERE timeout_seconds IN (900, 3600)"
+    )
+    conn.commit()
+
+
+def _migrate_default_execution_timeout_to_3600(cursor, conn):
+    """Issue #665: bump default chat execution timeout from 15min → 60min.
+
+    Rewrites any `agent_ownership.execution_timeout_seconds` row that
+    is still at the old 900s default to the new 3600s. Rows where the
+    operator explicitly set a different value (which is every value
+    except 900) are untouched — the assumption is that 900 means
+    "never customised; tracking the platform default."
+
+    Risk: an operator who deliberately set 900 to keep the old window
+    gets upgraded. Acceptable per the issue text; the per-agent
+    timeout endpoint (PUT /api/agents/{name}/timeout) is the explicit
+    override for that case.
+
+    Idempotent: subsequent runs find nothing at 900 and no-op.
+    """
+    cursor.execute(
+        "UPDATE agent_ownership SET execution_timeout_seconds = 3600 "
+        "WHERE execution_timeout_seconds = 900"
+    )
+    # Per-schedule override column has its own DEFAULT 900 in the DDL.
+    # Without this bump the watchdog's
+    # COALESCE(s.timeout_seconds, ao.execution_timeout_seconds, 900)
+    # would still pick up 900 from the schedule row before falling
+    # through to the agent's 3600 — defeating the intent of #665 for
+    # scheduled tasks.
+    cursor.execute(
+        "UPDATE agent_schedules SET timeout_seconds = 3600 "
+        "WHERE timeout_seconds = 900"
+    )
+    conn.commit()
+
+
+def _migrate_agent_schedules_soft_delete(cursor, conn):
+    """Issue #834 Phase 1b: soft-delete column + partial index on agent_schedules.
+
+    Mirrors Phase 1a's agent_ownership column. `DELETE /api/agents/{name}/
+    schedules/{id}` becomes UPDATE deleted_at; the cleanup_service sweep
+    hard-deletes rows past `schedule_soft_delete_retention_days`.
+
+    Partial index narrows the retention-sweep scan to actually-deleted
+    rows so it stays cheap as the schedule count grows.
+    """
+    _safe_add_column(
+        cursor,
+        "agent_schedules",
+        "deleted_at",
+        "ALTER TABLE agent_schedules ADD COLUMN deleted_at TEXT",
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_schedules_deleted_at "
+        "ON agent_schedules(deleted_at) WHERE deleted_at IS NOT NULL"
+    )
+    conn.commit()
+
+
+def _migrate_agent_ownership_soft_delete(cursor, conn):
+    """Issue #834 Phase 1a: soft-delete column + partial index on agent_ownership.
+
+    Adds `deleted_at TEXT` (NULL = live). The hard-delete path on
+    `agent_ownership` becomes a soft-delete (UPDATE deleted_at = now);
+    the retention sweep in cleanup_service hard-deletes rows whose
+    deleted_at is older than the configured retention window (default
+    180 days) and runs the #816 cascade_delete at that point to clean
+    child tables.
+
+    The partial index narrows the retention-sweep scan to
+    actually-deleted rows so it stays cheap as the live agent count
+    grows.
+    """
+    _safe_add_column(
+        cursor,
+        "agent_ownership",
+        "deleted_at",
+        "ALTER TABLE agent_ownership ADD COLUMN deleted_at TEXT",
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_ownership_deleted_at "
+        "ON agent_ownership(deleted_at) WHERE deleted_at IS NOT NULL"
+    )
+    conn.commit()
+
+
 MIGRATIONS = [
     ("agent_sharing", _migrate_agent_sharing_table),
     ("schedule_executions_observability", _migrate_schedule_executions_observability),
@@ -1926,4 +2239,15 @@ MIGRATIONS = [
     ("agent_sessions_tables", _migrate_agent_sessions_tables),
     ("session_compact_events", _migrate_session_compact_events),
     ("public_links_type", _migrate_public_links_type),
+    ("slack_bot_token_encryption", _migrate_slack_bot_token_encryption),
+    ("canary_violations_table", _migrate_canary_violations_table),
+    ("execution_retention_index", _migrate_execution_retention_index),
+    ("default_execution_timeout_to_3600", _migrate_default_execution_timeout_to_3600),
+    ("fix_retention_index_status_values", _migrate_fix_retention_index_status_values),
+    ("agent_ownership_soft_delete", _migrate_agent_ownership_soft_delete),
+    ("execution_retry_count", _migrate_execution_retry_count),
+    ("agent_schedules_soft_delete", _migrate_agent_schedules_soft_delete),
+    # #913 — must come AFTER default_execution_timeout_to_3600 so we null out
+    # both 900 (legacy) and 3600 (post-#665 rewrite) in one pass.
+    ("null_legacy_schedule_timeouts", _migrate_null_legacy_schedule_timeouts),
 ]

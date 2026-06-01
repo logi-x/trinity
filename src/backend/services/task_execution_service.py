@@ -29,8 +29,15 @@ import httpx
 from database import db
 from models import ActivityState, ActivityType, TaskExecutionStatus
 from services.activity_service import activity_service
+from services.agent_call_limiter import (
+    BackendAgentCallBudgetExhausted,
+    acquire_agent_call_slot,
+)
+from services.agent_client import CircuitState
 from services.capacity_manager import CapacityFull, get_capacity_manager
-from utils.credential_sanitizer import sanitize_execution_log, sanitize_response
+from services.platform_audit_service import AuditEventType, platform_audit_service
+from services.settings_service import settings_service
+from utils.credential_sanitizer import sanitize_dict, sanitize_execution_log, sanitize_response, sanitize_text
 from services.platform_prompt_service import (
     ExecutionContext,
     compose_system_prompt,
@@ -58,6 +65,7 @@ class TaskExecutionErrorCode(str, Enum):
     BILLING = "billing"             # Rate limit, credit, or billing issue
     AGENT_ERROR = "agent_error"     # Agent returned non-zero exit code
     NETWORK = "network"             # HTTP/connection error to agent container
+    CIRCUIT_OPEN = "circuit_open"   # Circuit breaker open — agent known unhealthy (#767)
 
 
 @dataclass
@@ -77,6 +85,85 @@ class TaskExecutionResult:
 
 
 # ---------------------------------------------------------------------------
+# Context-window helper (shared between success and HTTPError salvage paths)
+# ---------------------------------------------------------------------------
+
+
+def _compute_context_used(metadata: dict) -> Optional[int]:
+    """Derive context-window pressure (tokens used) from an
+    ``ExecutionMetadata.model_dump()`` dict.
+
+    Mirrors the success-path logic at the original call site: cache_read
+    + cache_creation is the stable signal (monotonic across a resumed
+    session), fall back to input_tokens when caching isn't engaged.
+    Returns None when no token signal is present.
+
+    Shared between the success path and the #678 HTTPError salvage so
+    both compute context_used the same way.
+    """
+    if not metadata:
+        return None
+    cache_read = metadata.get("cache_read_tokens") or 0
+    cache_create = metadata.get("cache_creation_tokens") or 0
+    if cache_read + cache_create > 0:
+        return cache_read + cache_create
+    input_tokens = metadata.get("input_tokens") or 0
+    return input_tokens if input_tokens > 0 else None
+
+
+# ---------------------------------------------------------------------------
+# Reader-race signature (Issue #678 auto-retry)
+# ---------------------------------------------------------------------------
+
+# Conservative gating: only retry when the original turn was cheap and
+# the agent-server's classifier marked it as a reader-race (not a real
+# claude failure). num_turns < 5 keeps a 24-min execution like the
+# original #678 from being silently re-burned.
+_AUTO_RETRY_MAX_TURNS = 5
+
+# The retry must not silently double the operator's timeout budget. Reader
+# races fire fast; 5 min is plenty. We pass `min(effective_timeout, this)`
+# to the retry so a 30-min task that ate 28 min before failing doesn't get
+# another 30 min on top.
+_AUTO_RETRY_MAX_TIMEOUT_S = 300.0
+
+
+def _is_reader_race_signature(detail) -> bool:
+    """True when a 502 detail body matches the stdout reader-race
+    signature and the original turn was cheap enough to retry.
+
+    The structured body comes from
+    ``error_classifier._classify_empty_result`` (Issue #678):
+
+        {
+            "message": "Execution completed without a result message ...",
+            "metadata": {...},
+            "raw_message_count": N,
+            "parse_failure_count": N,
+            "recovery_attempted": True,
+        }
+
+    Gating: raw_message_count == 0 (reader thread emitted nothing —
+    distinct from a partial stream), num_turns < 5 (cheap to retry),
+    parse_failure_count == 0 (no wire corruption).
+    """
+    if not isinstance(detail, dict):
+        return False
+    if not detail.get("recovery_attempted"):
+        return False
+    if detail.get("raw_message_count", 0) != 0:
+        return False
+    if detail.get("parse_failure_count", 0) != 0:
+        return False
+    meta = detail.get("metadata") or {}
+    num_turns = meta.get("num_turns") or 0
+    if num_turns >= _AUTO_RETRY_MAX_TURNS:
+        return False
+    msg = (detail.get("message") or "").lower()
+    return "result message" in msg
+
+
+# ---------------------------------------------------------------------------
 # Agent HTTP helper (moved from routers/chat.py)
 # ---------------------------------------------------------------------------
 
@@ -93,15 +180,36 @@ async def agent_post_with_retry(
 
     Handles the case where a container is running but its internal HTTP
     server is not yet ready.
+
+    #904 RC-1: gated by the backend agent-call semaphore in
+    ``services.agent_call_limiter`` — limits concurrent outbound calls
+    per agent (to the agent's ``max_parallel_tasks``) and globally (to
+    ``BACKEND_AGENT_CALL_LIMIT``, default 8). Prevents one misbehaving
+    agent's long-running HTTP call from saturating the backend's event
+    loop and stalling the dashboard / healthcheck. The gate wraps each
+    connect-retry attempt independently — a `httpx.ConnectError` that
+    triggers a retry briefly releases the slot so other callers aren't
+    blocked while we sleep before the next attempt.
     """
     agent_url = f"http://agent-{agent_name}:8000{endpoint}"
 
-    last_error = None
+    last_error: Optional[Exception] = None
     for attempt in range(max_retries):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(agent_url, json=payload)
-                return response
+            async with acquire_agent_call_slot(agent_name):
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(agent_url, json=payload)
+                    return response
+        except BackendAgentCallBudgetExhausted:
+            # Translate to a synthetic 503 ``httpx.HTTPStatusError`` so
+            # the caller's existing `httpx.HTTPError` except branch
+            # handles slot release, execution-row FAILED write, and
+            # SUB-003 short-circuit (the new error string contains the
+            # SIGKILL/OOM markers added by #907, so `is_auth_failure`
+            # rejects it). Carrying the exception detail through a
+            # `Request`-less synthetic Response keeps the caller's
+            # status-code branching code path identical.
+            raise
         except httpx.ConnectError as e:
             last_error = e
             if attempt < max_retries - 1:
@@ -278,6 +386,11 @@ class TaskExecutionService:
         if timeout_seconds is None:
             timeout_seconds = db.get_execution_timeout(agent_name)
 
+        # #831: Resolve null model → platform default so the agent always receives
+        # a concrete model string. Avoids the stale "sonnet" hardcode in base-image.
+        if model is None:
+            model = settings_service.get_platform_default_model()
+
         # ---- 1. Create execution record (if not provided) ----------------
         if not execution_id:
             # Snapshot subscription at record time (best-effort) for usage tracking (SUB-004)
@@ -366,7 +479,37 @@ class TaskExecutionService:
                 )
             except Exception as e:
                 logger.warning(f"[TaskExecService] Failed to track activity start: {e}")
-            # ---- 3b. Mark execution as dispatched ---------------------------
+            # ---- 3b. Circuit breaker fast-fail (precursor to #526) ----------
+            # Check the per-agent circuit breaker before marking dispatched.
+            # If the CB is open the agent is known-unhealthy; close the record
+            # immediately rather than letting it hang until cleanup (120 min).
+            circuit = CircuitState(agent_name)
+            if not circuit.allow_request():
+                error_msg = "Agent circuit breaker open — agent is unhealthy"
+                logger.warning(f"[TaskExecService] CB open, fast-failing execution {execution_id} for {agent_name}")
+                if execution_id:
+                    existing = db.get_execution(execution_id)
+                    if not existing or existing.status != TaskExecutionStatus.CANCELLED:
+                        db.update_execution_status(
+                            execution_id=execution_id,
+                            status=TaskExecutionStatus.FAILED,
+                            error=error_msg,
+                        )
+                if activity_id:
+                    await activity_service.complete_activity(
+                        activity_id=activity_id,
+                        status=ActivityState.FAILED,
+                        error=error_msg,
+                    )
+                return TaskExecutionResult(
+                    execution_id=execution_id or "",
+                    status=TaskExecutionStatus.FAILED,
+                    response="",
+                    error=error_msg,
+                    error_code=TaskExecutionErrorCode.CIRCUIT_OPEN,
+                )
+
+            # ---- 3c. Mark execution as dispatched ---------------------------
             # Set claude_session_id='dispatched' BEFORE calling the agent so
             # the no-session cleanup doesn't falsely mark long-running executions
             # as "Silent launch failure". Only truly orphaned executions (where
@@ -394,6 +537,7 @@ class TaskExecutionService:
                     schedule_name=(schedule_context or {}).get("name"),
                     schedule_cron=(schedule_context or {}).get("cron"),
                     schedule_next_run=(schedule_context or {}).get("next_run"),
+                    execution_id=execution_id,
                 )
                 effective_system_prompt = compose_system_prompt(
                     execution_context=exec_ctx,
@@ -424,6 +568,13 @@ class TaskExecutionService:
             effective_timeout = float(timeout_seconds or 600) + 10
             logger.info(f"[TaskExecService] Calling agent {agent_name} /api/task (timeout={effective_timeout}s, tools={allowed_tools}, msg_len={len(message)})")
 
+            # #678 retry bookkeeping. Hoisted ABOVE the first agent call so the
+            # except branches can read these without NameError when the first
+            # call raises (e.g. ConnectError after agent_post_with_retry's own
+            # internal retries are exhausted).
+            retry_count = 0
+            previous_attempt_cost = 0.0  # accumulator: failed-attempt cost rolled into terminal write
+
             response = await agent_post_with_retry(
                 agent_name,
                 "/api/task",
@@ -435,6 +586,95 @@ class TaskExecutionService:
 
             execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
             logger.info(f"[TaskExecService] Agent {agent_name} responded: HTTP {response.status_code} ({execution_time_ms}ms)")
+
+            # #678 auto-retry: when the agent server returned a 502 with the
+            # reader-race signature AND the original turn was cheap to retry,
+            # re-issue the request once with the same execution_id. The
+            # agent-server side reuses the row, so this is a true in-line
+            # retry (not a new execution).
+            if response.status_code == 502:
+                try:
+                    body = response.json()
+                except Exception:
+                    body = {}
+                inner_detail = body.get("detail") if isinstance(body, dict) else None
+                if _is_reader_race_signature(inner_detail):
+                    # #678 R1: cap the retry's timeout so we don't silently
+                    # double the operator's wallclock budget. The reader
+                    # race fires fast; 5 min is plenty. Cap the agent-side
+                    # timeout too — otherwise the agent runs to the original
+                    # 3600s while the backend gives up at 300s, wasting
+                    # the slot and a Claude subprocess.
+                    retry_agent_timeout = int(
+                        min(float(timeout_seconds or 600), _AUTO_RETRY_MAX_TIMEOUT_S)
+                    )
+                    retry_http_timeout = min(effective_timeout, _AUTO_RETRY_MAX_TIMEOUT_S)
+
+                    # CB re-check: if the agent went unhealthy between the
+                    # first 502 and now, fast-fail the retry the same way
+                    # the original call would have been fast-failed above.
+                    if not circuit.allow_request():
+                        logger.warning(
+                            f"[TaskExecService] CB opened between first call and "
+                            f"retry on {agent_name} — skipping auto-retry"
+                        )
+                    else:
+                        retry_count = 1
+                        prev_meta = inner_detail.get("metadata") or {}
+                        num_turns_before = prev_meta.get("num_turns") or 0
+                        # #678 R2: carry the failed attempt's cost into the
+                        # terminal cost write so the spend isn't silently
+                        # absorbed by the retry's $0-or-success replacement.
+                        prev_cost_raw = prev_meta.get("cost_usd")
+                        if isinstance(prev_cost_raw, (int, float)) and prev_cost_raw > 0:
+                            previous_attempt_cost = float(prev_cost_raw)
+                        logger.warning(
+                            f"[TaskExecService] Reader-race signature on {agent_name} "
+                            f"(num_turns={num_turns_before}, prev_cost=${previous_attempt_cost:.4f}) "
+                            f"— auto-retry 1/1"
+                        )
+                        # Fire-and-forget audit log. Best-effort; never blocks retry.
+                        # `phase=initiated` documents that this row attests the
+                        # retry was queued — a wire-level ConnectError after
+                        # this point would still leave the row in place.
+                        try:
+                            await platform_audit_service.log(
+                                event_type=AuditEventType.EXECUTION,
+                                event_action="auto_retry",
+                                source="task_execution_service",
+                                actor_agent_name=agent_name,
+                                target_type="execution",
+                                target_id=execution_id,
+                                details={
+                                    "reason": "reader_race_signature",
+                                    "attempt": 2,
+                                    "phase": "initiated",
+                                    "previous_num_turns": num_turns_before,
+                                    "previous_message": sanitize_text(
+                                        (inner_detail.get("message") or "")[:300]
+                                    ),
+                                },
+                            )
+                        except Exception as audit_err:
+                            logger.debug(f"[TaskExecService] audit log failed (non-fatal): {audit_err}")
+
+                        retry_payload = {**payload, "timeout_seconds": retry_agent_timeout}
+                        start_time = datetime.utcnow()
+                        response = await agent_post_with_retry(
+                            agent_name,
+                            "/api/task",
+                            retry_payload,
+                            max_retries=3,
+                            retry_delay=1.0,
+                            timeout=retry_http_timeout,
+                        )
+                        execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                        logger.info(
+                            f"[TaskExecService] Agent {agent_name} retry responded: "
+                            f"HTTP {response.status_code} ({execution_time_ms}ms, "
+                            f"http_timeout={retry_http_timeout}s, "
+                            f"agent_timeout={retry_agent_timeout}s)"
+                        )
 
             response.raise_for_status()
 
@@ -455,32 +695,11 @@ class TaskExecutionService:
                     except Exception as e:
                         logger.error(f"[TaskExecService] Failed to serialize execution_log for {execution_id}: {e}")
 
-            # Context-window pressure metric. Anthropic's `usage` object
-            # has three non-overlapping input buckets: input_tokens (fresh
-            # uncached), cache_creation_tokens (newly cached this turn),
-            # cache_read_tokens (re-read from a prior turn's cache).
-            #
-            # We can't simply sum them. The agent-server in claude_code.py
-            # overrides metadata.input_tokens with `modelUsage.inputTokens`
-            # (an aggregated total across all internal API calls this turn)
-            # whenever the latter is larger — which is virtually always
-            # true on tool-call turns. So input_tokens is sometimes the
-            # disjoint fresh value and sometimes the aggregated total, and
-            # summing it with cache_* double-counts in the second case.
-            #
-            # Stable approach: rely on cache_read + cache_creation, which
-            # are NEVER touched by the override and monotonically track
-            # the size of the cached conversation prefix. This is exactly
-            # what "context-window fullness" means for a --resume session.
-            # Fall back to input_tokens only when caching isn't engaged
-            # (cold turns with caching disabled, or the very first turn
-            # before the cache breakpoint has fired).
-            cache_read = metadata.get("cache_read_tokens") or 0
-            cache_create = metadata.get("cache_creation_tokens") or 0
-            if cache_read + cache_create > 0:
-                context_used = cache_read + cache_create
-            else:
-                context_used = metadata.get("input_tokens") or 0
+            # Context-window pressure metric. See ``_compute_context_used``
+            # for the cache_read + cache_creation invariant — shared with
+            # the #678 HTTPError salvage path so success and failure rows
+            # record context_used the same way.
+            context_used = _compute_context_used(metadata) or 0
             sanitized_resp = sanitize_response(response_data.get("response"))
             claude_session_id = response_data.get("session_id") or metadata.get("session_id")
 
@@ -493,6 +712,17 @@ class TaskExecutionService:
                 json.dumps(compact_events) if compact_events else None
             )
 
+            # #678 R2: roll the failed first attempt's cost into the
+            # terminal write so spend tracking reflects what we actually
+            # burnt, not just the retry. previous_attempt_cost is 0.0
+            # when no retry fired, so the no-retry path is unchanged.
+            retry_cost = metadata.get("cost_usd")
+            if previous_attempt_cost > 0:
+                base = retry_cost if isinstance(retry_cost, (int, float)) else 0.0
+                total_cost: Optional[float] = base + previous_attempt_cost
+            else:
+                total_cost = retry_cost
+
             # ---- 6. Update execution record ------------------------------
             if execution_id:
                 db.update_execution_status(
@@ -501,11 +731,12 @@ class TaskExecutionService:
                     response=sanitized_resp,
                     context_used=context_used if context_used > 0 else None,
                     context_max=metadata.get("context_window") or 200000,
-                    cost=metadata.get("cost_usd"),
+                    cost=total_cost,
                     tool_calls=tool_calls_json,
                     execution_log=execution_log_json,
                     claude_session_id=claude_session_id,
                     compact_metadata=compact_metadata_json,
+                    retry_count=retry_count or None,
                 )
 
             # ---- 7. Complete activity ------------------------------------
@@ -515,7 +746,7 @@ class TaskExecutionService:
                     status=ActivityState.COMPLETED,
                     details={
                         "session_id": response_data.get("session_id"),
-                        "cost_usd": metadata.get("cost_usd"),
+                        "cost_usd": total_cost,
                         "execution_time_ms": execution_time_ms,
                         "tool_count": len(response_data.get("execution_log", [])),
                         # #514: short preview surfaced on dashboard timeline hover
@@ -527,7 +758,7 @@ class TaskExecutionService:
                 execution_id=execution_id or "",
                 status=TaskExecutionStatus.SUCCESS,
                 response=sanitized_resp or "",
-                cost=metadata.get("cost_usd"),
+                cost=total_cost,
                 context_used=context_used if context_used > 0 else None,
                 context_max=metadata.get("context_window") or 200000,
                 session_id=claude_session_id,
@@ -567,12 +798,57 @@ class TaskExecutionService:
                 error_code=TaskExecutionErrorCode.TIMEOUT,
             )
 
+        except BackendAgentCallBudgetExhausted as e:
+            # #904 RC-1: backend agent-call budget exhausted. Different
+            # from a normal `httpx.HTTPError` because no Claude work
+            # started — the rejection happened entirely inside the
+            # backend's semaphore wait. SUB-003 must NOT fire (the
+            # agent's subscription is irrelevant here), the execution
+            # row should be marked FAILED with a clear message, and
+            # the slot will be released by the outer `finally`.
+            error_msg = str(e)
+            logger.warning(
+                f"[TaskExecService] Rejecting task on {agent_name} — backend "
+                f"call budget exhausted: {error_msg}"
+            )
+            if execution_id:
+                existing = db.get_execution(execution_id)
+                if not existing or existing.status != TaskExecutionStatus.CANCELLED:
+                    db.update_execution_status(
+                        execution_id=execution_id,
+                        status=TaskExecutionStatus.FAILED,
+                        error=error_msg,
+                    )
+            if activity_id:
+                await activity_service.complete_activity(
+                    activity_id=activity_id,
+                    status=ActivityState.FAILED,
+                    error=error_msg,
+                )
+            return TaskExecutionResult(
+                execution_id=execution_id or "",
+                status=TaskExecutionStatus.FAILED,
+                response="",
+                error=error_msg,
+            )
+
         except httpx.HTTPError as e:
             error_msg = f"HTTP error: {type(e).__name__}"
+            # #678: when the agent returns a structured dict detail (from
+            # _classify_empty_result), salvage partial metadata onto the
+            # failure row instead of writing null-everything.
+            partial_metadata: dict = {}
+            error_data = None
             if hasattr(e, "response") and e.response is not None:
                 try:
                     error_data = e.response.json()
-                    if "detail" in error_data:
+                    detail = error_data.get("detail")
+                    if isinstance(detail, dict):
+                        # #678 structured body
+                        error_msg = detail.get("message") or str(detail)
+                        if isinstance(detail.get("metadata"), dict):
+                            partial_metadata = detail["metadata"]
+                    elif "detail" in error_data:
                         error_msg = error_data["detail"]
                 except Exception:
                     if e.response.text:
@@ -611,6 +887,31 @@ class TaskExecutionService:
                 logger.warning(f"[TaskExecService] Auth failure detected on {agent_name}: {error_msg[:200]}")
                 error_code = TaskExecutionErrorCode.AUTH
 
+            # #678 salvage: surface what telemetry the agent did capture
+            # before its stdout reader thread wedged. Sanitize the partial
+            # metadata once more here as defense-in-depth — the agent-server
+            # side already sanitized, but error_message can carry tokens
+            # from claude output (stream_parser.py:281).
+            if partial_metadata:
+                partial_metadata = sanitize_dict(partial_metadata)
+            salvage_cost_raw = partial_metadata.get("cost_usd") if partial_metadata else None
+            salvage_context = _compute_context_used(partial_metadata) if partial_metadata else None
+            salvage_context_max = (
+                (partial_metadata.get("context_window") or 200000)
+                if partial_metadata
+                else None
+            )
+
+            # #678 R2: when the retry ALSO failed, the first attempt's cost
+            # lives in previous_attempt_cost and the retry's cost lives in
+            # salvage_cost_raw (from the retry-failure body). Sum so the
+            # FAILED row reflects total burn, not just the retry slice.
+            if previous_attempt_cost > 0:
+                base = salvage_cost_raw if isinstance(salvage_cost_raw, (int, float)) else 0.0
+                salvage_cost: Optional[float] = base + previous_attempt_cost
+            else:
+                salvage_cost = salvage_cost_raw
+
             if execution_id:
                 existing = db.get_execution(execution_id)
                 if not existing or existing.status != TaskExecutionStatus.CANCELLED:
@@ -618,6 +919,10 @@ class TaskExecutionService:
                         execution_id=execution_id,
                         status=TaskExecutionStatus.FAILED,
                         error=error_msg,
+                        cost=salvage_cost,
+                        context_used=salvage_context,
+                        context_max=salvage_context_max,
+                        retry_count=retry_count or None,
                     )
             if activity_id:
                 await activity_service.complete_activity(
@@ -631,6 +936,9 @@ class TaskExecutionService:
                 response="",
                 error=error_msg,
                 error_code=error_code,  # Issue #285: Include auth error code
+                cost=salvage_cost,
+                context_used=salvage_context,
+                context_max=salvage_context_max,
             )
 
         except Exception as e:
@@ -656,6 +964,27 @@ class TaskExecutionService:
                 response="",
                 error=error_msg,
             )
+
+        except asyncio.CancelledError:
+            # Python 3.11+: CancelledError is BaseException, bypasses except Exception.
+            # On backend shutdown, background tasks are cancelled; close the record
+            # immediately so cleanup_service doesn't inflate duration (#767).
+            if execution_id:
+                try:
+                    existing = db.get_execution(execution_id)
+                    if existing and existing.status not in (
+                        TaskExecutionStatus.SUCCESS,
+                        TaskExecutionStatus.FAILED,
+                        TaskExecutionStatus.CANCELLED,
+                    ):
+                        db.update_execution_status(
+                            execution_id=execution_id,
+                            status=TaskExecutionStatus.FAILED,
+                            error="Execution cancelled (backend shutdown)",
+                        )
+                except Exception:
+                    pass
+            raise
 
         finally:
             # ---- 8. Release slot (only if acquired) ----------------------

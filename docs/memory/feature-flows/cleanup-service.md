@@ -1,5 +1,9 @@
 # Feature: Cleanup Service (CLEANUP-001)
 
+> **Updated 2026-05-17 (#869):** `WATCHDOG_HTTP_TIMEOUT` increased from 5.0 → 15.0 seconds to handle agents under load. `SlotService._cleanup_stale_slots_for_agent` now reads each slot's `timeout_seconds` from its per-slot metadata HASH (stored at acquire time) instead of using the agent-level default for all slots. Per-slot TTL = `stored_timeout + SLOT_TTL_BUFFER`; falls back to the per-agent default when metadata is absent.
+
+> **Updated 2026-05-11 (#686):** The interactive `chat_with_agent()` handler in `routers/chat.py` is now a second producer of the `claude_session_id='dispatched'` sentinel (parallel of #279). The no-session sweep's correctness assumption now extends to interactive `/chat` executions too. See the updated [`mark_execution_dispatched`](#mark_execution_dispatched-scheduleoperations) and [Fast-fail no-session executions](#cleanup-cycle-run_cleanup) sections.
+
 > **Updated 2026-04-26 (#428):** Stale-slot reclaim and watchdog release now go through [`CapacityManager`](capacity-management.md) — `capacity.reclaim_stale(agent_timeouts)` replaces `slot_service.cleanup_stale_slots(...)` and `capacity.release_if_matches(agent, exec_id)` replaces the prior pair of `slot_service.release_slot` + `execution_queue.force_release_if_matches`. Recovery (`_recover_execution`) calls `capacity.release(...)`. `ExecutionQueue` is gone; the TOCTOU-safe match check lives on the new facade.
 
 ## Overview
@@ -27,7 +31,7 @@ CLEANUP_INTERVAL_SECONDS = 300        # 5 minutes
 EXECUTION_STALE_TIMEOUT_MINUTES = 120  # SCHED-ASYNC-001: increased from 30 to support long-running tasks
 ACTIVITY_STALE_TIMEOUT_MINUTES = 120   # SCHED-ASYNC-001: increased from 30 to support long-running tasks
 NO_SESSION_TIMEOUT_SECONDS = 60       # Issue #106: fast-fail executions without Claude session
-WATCHDOG_HTTP_TIMEOUT = 5.0           # Issue #129: timeout for agent HTTP calls during reconciliation
+WATCHDOG_HTTP_TIMEOUT = 15.0          # Timeout for agent HTTP calls during reconciliation (#869: increased from 5s to handle agents under load)
 ERROR_FETCH_TIMEOUT = 2.0             # Issue #286: timeout for fetching error context from agent
 MAX_ERROR_MESSAGE_LENGTH = 2000       # Issue #286: truncate combined error messages
 ```
@@ -67,7 +71,7 @@ Singleton pattern via global `cleanup_service` instance (line 141).
 
 ### Cleanup Cycle (`run_cleanup`)
 
-Seven sequential operations plus an hourly maintenance gate, each wrapped in individual try/except. Watchdog runs FIRST to release resources before passive cleanup:
+Nine sequential operations plus an hourly maintenance gate, each wrapped in individual try/except. Watchdog runs FIRST to release resources before passive cleanup:
 
 0. **Watchdog: reconcile DB vs agent process registries** (Issue #129, #226)
    ```python
@@ -85,7 +89,7 @@ Seven sequential operations plus an hourly maintenance gate, each wrapped in ind
    ```python
    count = db.mark_no_session_executions_failed(NO_SESSION_TIMEOUT_SECONDS)
    ```
-   Marks `running` executions with `claude_session_id IS NULL` older than 60 seconds as failed. These are silent launch failures where the backend failed to dispatch to the agent. Note: `TaskExecutionService` sets `claude_session_id='dispatched'` before calling the agent (step 3b), so only executions that never reached dispatch are caught here.
+   Marks `running` executions with `claude_session_id IS NULL` older than 60 seconds as failed. These are silent launch failures where the backend failed to dispatch to the agent. Note: both `TaskExecutionService` (step 3b, for `/task` / public chat / scheduled executions) AND the `chat_with_agent()` handler in `routers/chat.py` (added in #686 as the parallel of #279, for interactive `/chat` executions) set `claude_session_id='dispatched'` before their agent HTTP calls — so only executions that never reached dispatch are caught here. Both `/task` and `/chat` codepaths are protected from this false-fail sweep.
 
 3. **Finalize orphaned skipped executions** (lines 98-105, Issue #106)
    ```python
@@ -111,7 +115,7 @@ Seven sequential operations plus an hourly maintenance gate, each wrapped in ind
        reclaimed, confirmed_running_ids, report
    )
    ```
-   Calls `SlotService.cleanup_stale_slots()` with per-agent timeouts (#226). The service scans all `agent:slots:*` keys, computes each agent's TTL as `timeout_seconds + 5 min buffer` (or default 20 min if no timeout configured), removes entries older than that TTL, and returns a dict mapping agent names to reclaimed execution IDs. Phase 3 is then implemented by `_process_stale_slot_reclaims()` — see [Phase 3 Slot Reclaim Re-verification](#phase-3-slot-reclaim-re-verification-issue-378) below.
+   Calls `SlotService.cleanup_stale_slots()` with per-agent timeouts (#226). The service scans all `agent:slots:*` keys and checks each slot individually (#869): it reads the slot's `timeout_seconds` from its metadata HASH (key `agent:slot:{name}:{execution_id}`, stored at acquire time), computes `effective_ttl = stored_timeout + SLOT_TTL_BUFFER (5 min)`, and removes the slot if its score (timestamp) is older than that TTL. Falls back to the per-agent default TTL (`execution_timeout_seconds + SLOT_TTL_BUFFER`, or `DEFAULT_SLOT_TTL_SECONDS = 1200` if no agent timeout is configured) when metadata is absent. This fixes premature reclamation of slots acquired with a schedule-level `timeout_seconds` that exceeds the agent-level default (e.g., a 7200s schedule on an agent with the 3600s default was previously reclaimed at ~3900s). Returns a dict mapping agent names to reclaimed execution IDs. Phase 3 is then implemented by `_process_stale_slot_reclaims()` — see [Phase 3 Slot Reclaim Re-verification](#phase-3-slot-reclaim-re-verification-issue-378) below.
 
 6. **Hourly maintenance: prune rate-limit events** (Issue #476)
    ```python
@@ -120,6 +124,25 @@ Seven sequential operations plus an hourly maintenance gate, each wrapped in ind
    self._cycle_count += 1
    ```
    Runs on cycle 0 (first sweep after boot) and every 12th cycle thereafter — so roughly hourly at the 5-min cleanup interval. Deletes rows from `subscription_rate_limit_events` with `occurred_at < iso_cutoff(24)`. Wired here after #476 confirmed `cleanup_old_rate_limit_events()` had zero production callers; without this, the SUB-003 rate-limit events table would grow unbounded once the lexicographic-compare fix started letting events age correctly.
+
+7. **Retention sweeps: execution_log + execution rows + health_checks** (Issue #772)
+   ```python
+   log_days, row_days, hc_days = _read_retention_settings()
+   if log_days > 0:
+       report.execution_logs_pruned = db.prune_execution_logs(log_days, RETENTION_CHUNK_SIZE_PER_CYCLE)
+   if row_days > 0:
+       report.execution_rows_pruned = db.prune_execution_rows(row_days, RETENTION_CHUNK_SIZE_PER_CYCLE)
+   if hc_days > 0:
+       report.health_checks_pruned = db.cleanup_old_health_records(hc_days, RETENTION_CHUNK_SIZE_PER_CYCLE)
+   ```
+   Three independent sweeps, each gated on its own ops-config retention window (`execution_log_retention_days` default 30, `execution_row_retention_days` default 90, `health_check_retention_days` default 7). `0` disables the corresponding sweep. Per-cycle row budget capped at `RETENTION_CHUNK_SIZE_PER_CYCLE = 5000` so the first post-deploy backfill spreads across multiple ticks rather than holding the write lock end-to-end. All cutoffs use `iso_cutoff()` (Architectural Invariant #16). The two execution sweeps share the partial index `idx_executions_completed_terminal ON schedule_executions(completed_at) WHERE status IN ('success','failed','cancelled','skipped')` (fix: #862 — original #772 used wrong values 'completed'/'terminated' that never matched real rows).
+
+8. **WAL checkpoint after reclaim** (Issue #772)
+   ```python
+   if (report.execution_logs_pruned + report.execution_rows_pruned + report.health_checks_pruned) > 0:
+       _wal_checkpoint_truncate()  # PRAGMA wal_checkpoint(TRUNCATE)
+   ```
+   Returns freed pages to the OS so the on-disk size actually shrinks. Cheap — runs only when a retention sweep produced work. Full `VACUUM` is delegated to a separate daily APScheduler job in `services/db_vacuum_service.py` (04:30 UTC, autocommit connection) because VACUUM holds an exclusive lock and is unsuitable for the 5-min cadence.
 
 ### Watchdog Reconciliation (Issue #129)
 
@@ -182,11 +205,13 @@ Replaces the inline Phase 3 loop. Extracted as its own method for direct unit te
 | Phase 0 said running? | Re-verify says? | Action |
 |---|---|---|
 | Yes (`confirmed_running_ids`) | — | **SKIP** (trust Phase 0, save an HTTP call) |
-| No | Agent unreachable (None) | **SKIP this cycle** — Phase 1 (120-min stale cleanup) is the backstop |
+| No | Agent unreachable (None) | **FAIL** — race-guarded `fail_stale_slot_execution` with `"Stale execution — agent '{name}' unresponsive during cleanup re-verify, slot TTL expired (#497)"`. Slot was reclaimed by TTL, so the execution is by construction older than `timeout + buffer`; the race guard (`WHERE status='running'`) preserves any SUCCESS that landed between slot reclaim and this write. (#497) |
 | No | Agent says still running | **SKIP** — #378 race closed; agent's own SUCCESS write will land correctly |
 | No | Agent says not running | **FAIL** — terminate (best-effort, #61) + `fail_stale_slot_execution` with phantom-stale error |
 
-4. **No cross-cycle state** — `slot_service.cleanup_stale_slots` removes reclaimed IDs from Redis permanently (`zremrangebyscore`), so a deferred ID cannot reappear in a later cycle's `reclaimed` dict. Any "retry on next cycle" state machine would be dead code. Transiently-unreachable agents are caught by Phase 0's orphan recovery on subsequent cycles (when the agent becomes reachable again) and by Phase 1's 120-min stale cleanup as a final backstop.
+4. **No cross-cycle state** — `slot_service.cleanup_stale_slots` removes reclaimed IDs from Redis permanently (`zremrangebyscore`), so a deferred ID cannot reappear in a later cycle's `reclaimed` dict. Any "retry on next cycle" state machine would be dead code. Transiently-unreachable agents now fail immediately (#497) — the prior "wait for Phase 1's 120-min backstop" path produced zombie `running` rows that polluted dashboards under sustained partial-outage.
+
+5. **Residual flicker risk (#497, documented)** — if a force-failed execution's agent later recovers and writes SUCCESS via `update_execution_status`, that path overwrites FAILED per #378's "SUCCESS wins over FAILED" rule. The execution must have run past `timeout + buffer` for its slot to be reclaimed, so this represents a deliverable that exceeded its budget. Follow-up: narrow the SUCCESS-over-FAILED rule to exclude FAILED rows tagged with the cleanup marker if this ever becomes a real operator complaint.
 
 #### Residual-race observability
 
@@ -306,7 +331,7 @@ WHERE id = ?
 #### mark_execution_dispatched (ScheduleOperations)
 **File**: `src/backend/db/schedules.py:570-590`
 
-Called by `TaskExecutionService` (step 3b) before the agent HTTP call. Sets `claude_session_id='dispatched'` so the no-session cleanup only catches executions that never reached dispatch.
+Called by two codepaths before the agent HTTP call: (1) `TaskExecutionService.execute_task()` step 3b (for `/task`, public chat, and scheduled executions), and (2) `chat_with_agent()` in `src/backend/routers/chat.py:313-321` (for interactive `/chat` executions, added in #686 as the parallel of #279). Sets `claude_session_id='dispatched'` so the no-session cleanup only catches executions that never reached dispatch. On success, `chat_with_agent()` overwrites the sentinel with the real Claude UUID derived from `response_data`/`session_data`/`metadata` via `db.update_execution_status(claude_session_id=real_session_id)` at `routers/chat.py:411-428` (#686 UC1) — for observability and `--resume`-style reattachment.
 
 **SQL**:
 ```sql
@@ -410,15 +435,13 @@ WHERE id = ?
 
 **Logic**:
 1. Scans all keys matching `agent:slots:*` pattern via `SCAN`
-2. For each agent, calls `_cleanup_stale_slots_for_agent()` which returns the reclaimed execution IDs
-3. Removes ZSET entries with score (timestamp) older than TTL:
-   ```
-   ZREMRANGEBYSCORE agent:slots:{name} -inf {cutoff_timestamp}
-   ```
-4. Deletes corresponding metadata keys: `agent:slot:{name}:{execution_id}`
-5. Returns the execution IDs so the caller (cleanup service) can fail corresponding DB records
+2. For each agent, calls `_cleanup_stale_slots_for_agent()` which iterates all slots via `ZRANGE withscores=True` and returns the reclaimed execution IDs
+3. For each slot, reads `timeout_seconds` from its metadata HASH at `agent:slot:{name}:{execution_id}` (stored at acquire time), computes `effective_ttl = stored_timeout + SLOT_TTL_BUFFER`. Falls back to `default_slot_ttl` (per-agent: `execution_timeout_seconds + SLOT_TTL_BUFFER`, or `DEFAULT_SLOT_TTL_SECONDS = 1200` if unconfigured) when metadata is absent (#869)
+4. Removes stale entries individually (slot is expired if `score < now - effective_ttl`) via `ZREM`
+5. Deletes corresponding metadata keys: `agent:slot:{name}:{execution_id}`
+6. Returns the execution IDs so the caller (cleanup service) can fail corresponding DB records
 
-**TTL** (#226): Per-agent, computed as `execution_timeout_seconds + SLOT_TTL_BUFFER (5 min)`. Falls back to `DEFAULT_SLOT_TTL_SECONDS = 1200` (20 minutes) if no agent timeout is configured. This prevents premature slot reclamation for agents with long-running tasks (e.g., 60-120 min timeouts).
+**TTL** (#226, #869): Per-slot, computed from the `timeout_seconds` stored in the slot's metadata HASH at acquire time — this captures the schedule-level timeout actually used (e.g., 7200s), not just the agent-level default (e.g., 3600s). Falls back to the per-agent default (`execution_timeout_seconds + SLOT_TTL_BUFFER`, or `DEFAULT_SLOT_TTL_SECONDS = 1200` if no agent timeout configured) when metadata is absent. Fixes premature reclamation of slots with schedule-level timeouts exceeding the agent-level default.
 
 ## Side Effects
 - **Logging**: Each cleanup cycle logs results at INFO level when resources are cleaned
@@ -432,7 +455,8 @@ WHERE id = ?
 
 | Error Case | Handling | Impact |
 |------------|----------|--------|
-| Watchdog agent unreachable | Skipped, retry next cycle | No false positives |
+| Phase 0 watchdog agent unreachable | Skipped, retry next cycle | No false positives |
+| Phase 3 re-verify agent unreachable | Force-fail via race-guarded writer (#497) | Bounded zombie window; agent recovery + SUCCESS still wins per #378 rule (documented risk) |
 | Watchdog single recovery fails | Per-execution try/except, continues | Other recoveries unaffected |
 | Watchdog >50% recoveries fail | WARNING log (systemic failure) | Operator alerted |
 | Watchdog terminate fails on agent | Logged, DB/capacity still cleaned | Zombie process may linger |

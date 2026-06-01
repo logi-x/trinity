@@ -12,6 +12,8 @@ Cron-based automation for agents using APScheduler. Schedule recurring tasks wit
 
 ## How It Works
 
+![Agent Schedules tab showing three active weekly schedules with cron expressions and execution history](../images/agent-schedules-tab.png)
+
 1. Open the agent detail page and go to the scheduling section.
 2. Click **Create Schedule**.
 3. Configure: name, cron expression (e.g., `0 9 * * 1-5` for weekdays at 9 AM), message/task, timezone, and description.
@@ -134,9 +136,18 @@ if new_items:
 # else: exit 0 with empty stdout → Trinity records a skip
 ```
 
+## Per-Schedule Timeout
+
+Each schedule has its own `timeout_seconds`. It cannot exceed the agent's `execution_timeout_seconds` cap:
+
+- Creating or updating a schedule with `timeout_seconds > agent.execution_timeout_seconds` returns `400 error=schedule_timeout_exceeds_agent_cap`.
+- Lowering the agent cap below an active schedule's timeout returns `400 error=agent_timeout_below_active_schedules`.
+
+Raise the agent cap first, then raise the schedule timeout.
+
 ## Limitations
 
-- Execution timeout is per-agent configurable (default 15 minutes, max 2 hours).
+- Execution timeout is per-agent configurable (default 60 minutes, max 2 hours).
 - Parallel execution is controlled by per-agent capacity slots (default 3).
 - Missed jobs are only caught up within the 1-hour grace window.
 - Retries count against the agent's parallel capacity slots.

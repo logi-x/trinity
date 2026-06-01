@@ -24,12 +24,23 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
           </button>
+          <button
+            @click="openNewFolderModal"
+            :disabled="loading"
+            class="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded disabled:opacity-50"
+            :title="newFolderParent === '/home/developer' ? 'New folder in workspace root' : `New folder in ${selectedFile?.name}`"
+          >
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11v4m-2-2h4" />
+            </svg>
+          </button>
           <label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 cursor-pointer whitespace-nowrap" title="Show hidden files">
             <input
               type="checkbox"
               v-model="showHidden"
               @change="loadFiles"
-              class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+              class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-action-primary-600 focus:ring-action-primary-500 h-3.5 w-3.5"
             />
             <span>Hidden</span>
           </label>
@@ -42,7 +53,7 @@
               v-model="searchQuery"
               type="text"
               placeholder="Search files..."
-              class="w-full pl-7 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700 dark:text-white focus:ring-indigo-500 focus:border-indigo-500"
+              class="w-full pl-7 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700 dark:text-white focus:ring-action-primary-500 focus:border-action-primary-500"
             />
             <svg class="absolute left-2 top-2 h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -53,7 +64,7 @@
         <!-- Tree View -->
         <div class="flex-1 overflow-auto p-2">
           <div v-if="loading" class="flex items-center justify-center h-32">
-            <svg class="animate-spin h-6 w-6 text-indigo-600" fill="none" viewBox="0 0 24 24">
+            <svg class="animate-spin h-6 w-6 text-action-primary-600" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
@@ -127,7 +138,7 @@
                   <button
                     @click="saveFile"
                     :disabled="saving || !hasUnsavedChanges"
-                    class="inline-flex items-center px-3 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                    class="inline-flex items-center px-3 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-action-primary-600 hover:bg-action-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-action-primary-500 disabled:opacity-50"
                   >
                     <svg v-if="saving" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
                       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -141,7 +152,7 @@
                   <button
                     @click="cancelEdit"
                     :disabled="saving"
-                    class="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                    class="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-action-primary-500 disabled:opacity-50"
                   >
                     Cancel
                   </button>
@@ -152,7 +163,7 @@
                   <button
                     v-if="isTextFile && !isEditProtected"
                     @click="startEdit"
-                    class="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    class="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-action-primary-500"
                   >
                     <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -162,7 +173,7 @@
                   <button
                     @click="downloadFile"
                     :disabled="downloading"
-                    class="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                    class="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-action-primary-500 disabled:opacity-50"
                   >
                     <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -234,7 +245,48 @@
             </button>
             <button
               @click="showDeleteConfirm = false"
-              class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 shadow-sm px-4 py-2 bg-white dark:bg-gray-700 text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm"
+              class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 shadow-sm px-4 py-2 bg-white dark:bg-gray-700 text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-action-primary-500 sm:mt-0 sm:w-auto sm:text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- New Folder Modal -->
+    <div v-if="showNewFolderModal" class="fixed inset-0 z-50 overflow-y-auto">
+      <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="showNewFolderModal = false"></div>
+        <div class="relative bg-white dark:bg-gray-800 rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:max-w-lg sm:w-full sm:p-6">
+          <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white">New Folder</h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Create in <strong class="text-gray-900 dark:text-white break-all">{{ newFolderParent }}</strong>
+          </p>
+          <input
+            v-model="newFolderName"
+            type="text"
+            placeholder="folder-name"
+            :disabled="creatingFolder"
+            @keyup.enter="createFolder"
+            class="mt-3 w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700 dark:text-white focus:ring-action-primary-500 focus:border-action-primary-500"
+          />
+          <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Use <code>/</code> to create nested folders.</p>
+          <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+            <button
+              @click="createFolder"
+              :disabled="creatingFolder || !newFolderName.trim()"
+              class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-action-primary-600 text-base font-medium text-white hover:bg-action-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-action-primary-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
+            >
+              <svg v-if="creatingFolder" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Create
+            </button>
+            <button
+              @click="showNewFolderModal = false"
+              class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 shadow-sm px-4 py-2 bg-white dark:bg-gray-700 text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-action-primary-500 sm:mt-0 sm:w-auto sm:text-sm"
             >
               Cancel
             </button>
@@ -295,7 +347,18 @@ const previewError = ref(null)
 const downloading = ref(false)
 const deleting = ref(false)
 const showDeleteConfirm = ref(false)
+const showNewFolderModal = ref(false)
+const newFolderName = ref('')
+const creatingFolder = ref(false)
 const showHidden = ref(localStorage.getItem('filesPanel.showHidden') === 'true')
+
+// Folder is created inside the selected directory when one is selected,
+// otherwise at the workspace root.
+const newFolderParent = computed(() =>
+  selectedFile.value?.type === 'directory'
+    ? selectedFile.value.path
+    : '/home/developer'
+)
 // Edit mode state
 const isEditing = ref(false)
 const editContent = ref('')
@@ -489,6 +552,34 @@ const deleteFile = async () => {
     showNotification(`Failed to delete: ${errorMsg}`, 'error')
   } finally {
     deleting.value = false
+  }
+}
+
+const openNewFolderModal = () => {
+  newFolderName.value = ''
+  showNewFolderModal.value = true
+}
+
+const createFolder = async () => {
+  const name = newFolderName.value.trim().replace(/^\/+|\/+$/g, '')
+  if (!name || creatingFolder.value) return
+  if (name.split('/').some(seg => seg === '..' || seg === '.')) {
+    showNotification('Invalid folder name', 'error')
+    return
+  }
+
+  const folderPath = `${newFolderParent.value}/${name}`
+  creatingFolder.value = true
+  try {
+    await agentsStore.createAgentFolder(props.agentName, folderPath)
+    showNotification(`Created ${name}`)
+    showNewFolderModal.value = false
+    await loadFiles()
+  } catch (e) {
+    const errorMsg = e.response?.data?.detail || e.message
+    showNotification(`Failed to create folder: ${errorMsg}`, 'error')
+  } finally {
+    creatingFolder.value = false
   }
 }
 

@@ -66,6 +66,7 @@ def wait_for_agent_ready(monkeypatch):
         "services.settings_service": types.SimpleNamespace(
             get_anthropic_api_key=None, get_github_pat=None,
             get_agent_full_capabilities=None,
+            get_agent_default_resources=None,  # added to lifecycle.py import (#725)
         ),
         "services.skill_service": types.SimpleNamespace(skill_service=None),
     }
@@ -82,7 +83,8 @@ def wait_for_agent_ready(monkeypatch):
     pkg.__path__ = [os.path.join(_backend, "services", "agent_service")]
     monkeypatch.setitem(sys.modules, "services.agent_service", pkg)
     monkeypatch.setitem(sys.modules, "services.agent_service.read_only",
-                        types.SimpleNamespace(inject_read_only_hooks=None))
+                        types.SimpleNamespace(inject_read_only_hooks=None,
+                                              remove_read_only_hooks=None))
 
     spec = importlib.util.spec_from_file_location(
         "services.agent_service.lifecycle", src_path,

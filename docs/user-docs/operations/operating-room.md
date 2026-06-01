@@ -6,6 +6,8 @@ Unified operator command center with four tabs -- Queue, Notifications, Cost Ale
 
 ### Queue Tab
 
+![Operating Room showing 3 pending responses and 1 notification with escalated items from agents](../images/operating-room-queue.png)
+
 Shows items from agents' operator queues: questions, approval requests, and status updates.
 
 - Agents write to `~/.trinity/operator-queue.json` inside their container.
@@ -36,6 +38,12 @@ System-level information and controls.
 - Restart-resilient sync between agent containers and the backend database.
 - Manual refresh button available.
 - Stale prompt detection flags items older than expected.
+
+### Sync Health Alerts
+
+For agents with GitHub sync enabled, the Sync Health Service polls every 60 seconds and writes `sync_failing` queue entries when an agent's `consecutive_failures` hits 3. These appear in the Queue tab alongside agent-emitted items, so a broken git remote, expired PAT, or upstream divergence surfaces in the same place operators already watch.
+
+Per-agent sync state (last sync at, last error, ahead/behind counts on `main` and the working branch) is also visible on the agent header dot and at `GET /api/agents/{name}/git/sync-state`.
 
 ## For Agents
 

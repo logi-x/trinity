@@ -9,6 +9,7 @@ Issue: https://github.com/abilityai/trinity/issues/581
 """
 
 import asyncio
+import json
 import sys
 import types
 import pytest
@@ -85,8 +86,13 @@ def _stub_config():
     config_mod.GEMINI_API_KEY = "test-key"
     config_mod.VOICE_MODEL = "test-model"
     config_mod.VOICE_MAX_DURATION = 300
+    config_mod.REDIS_URL = "redis://user:pass@localhost:6379"
     config_mod.DEFAULT_GITHUB_TEMPLATE_REPOS = []
     config_mod.GITHUB_PAT_CREDENTIAL_ID = "github-pat-templates"
+    # Required by dependencies.py when test_voice_auth.py runs in the same session
+    config_mod.SECRET_KEY = "test-secret-key-for-unit-tests"
+    config_mod.ALGORITHM = "HS256"
+    config_mod.VOICE_ENABLED = True
     sys.modules["config"] = config_mod
 
 
@@ -110,11 +116,45 @@ def _stub_services_package():
 
 
 _stub_genai()
+
+# Snapshot real modules before installing the stubs that gemini_voice's
+# import chain needs. After gemini_voice has imported, restore the originals
+# so we don't pollute later unit files. Examples of breakage we'd otherwise
+# leak:
+#   * `config` stub omits EMAIL_PROVIDER → test_file_upload's
+#     telegram_adapter → services.email_service import fails.
+#   * services.docker_service / services.template_service stubs replace real
+#     coroutines with plain Mocks → workspace-delivery awaits explode.
+_voice_tools_pre_stub = {
+    name: sys.modules.get(name)
+    for name in (
+        "config",
+        "services.docker_service",
+        "services.template_service",
+    )
+}
 _stub_config()
 _stub_services_package()
 
+# Evict any stale stub registered by test_voice_auth.py when both files run in
+# the same pytest session — that module installs a fake services.gemini_voice
+# for isolation, and without this eviction the real class is unreachable.
+sys.modules.pop("services.gemini_voice", None)
+
 # Now we can import the service
-from services.gemini_voice import GeminiVoiceService, VoiceSession, _TOOL_PROMPT_MAX  # noqa: E402
+from services.gemini_voice import (  # noqa: E402
+    GeminiVoiceService, VoiceSession, _TOOL_PROMPT_MAX, _PANEL_CONTENT_MAX,
+    _PANEL_TOOL_NAMES, _classify_image_src, _WORKSPACE_ROOT,
+)
+
+# gemini_voice has captured what it needed from the docker/template stubs.
+# Restore the real modules so other unit files (e.g. test_file_upload) see
+# the real services.docker_service whose methods are real coroutines.
+for _name, _orig in _voice_tools_pre_stub.items():
+    if _orig is not None:
+        sys.modules[_name] = _orig
+    else:
+        sys.modules.pop(_name, None)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -139,6 +179,27 @@ def svc():
 
 class TestExecuteTool:
 
+    @pytest.fixture(autouse=True)
+    def _restore_agent_client(self):
+        """Snapshot and restore sys.modules['services.agent_client'] per test.
+
+        Each test below installs an *incomplete* `services.agent_client` stub
+        (e.g. missing the `AgentClient` class). Without teardown, the next
+        unit-suite file that does `from services.agent_client import AgentClient`
+        (sync_health_service, fleet status helpers, etc.) imports the polluted
+        stub and fails. Snapshotting per test keeps the contamination scoped
+        to the body of each individual test.
+        """
+        sentinel = object()
+        original = sys.modules.get("services.agent_client", sentinel)
+        try:
+            yield
+        finally:
+            if original is sentinel:
+                sys.modules.pop("services.agent_client", None)
+            else:
+                sys.modules["services.agent_client"] = original
+
     def test_success(self, svc):
         """Patching _execute_tool itself returns the expected value."""
         with patch.object(svc, "_execute_tool", AsyncMock(return_value="The answer is 42.")):
@@ -148,7 +209,9 @@ class TestExecuteTool:
     def test_success_real(self, svc):
         """Test _execute_tool with a mocked get_agent_client."""
         mock_response = MagicMock()
-        mock_response.response = "Task result text."
+        # AgentChatResponse exposes `.response_text`, not `.response` — guards the
+        # #979 regression where _execute_tool read the wrong attribute.
+        mock_response.response_text = "Task result text."
         mock_client = MagicMock()
         mock_client.task = AsyncMock(return_value=mock_response)
 
@@ -183,7 +246,7 @@ class TestExecuteTool:
     def test_prompt_truncated_to_max(self, svc):
         """Prompts longer than _TOOL_PROMPT_MAX are truncated before forwarding."""
         mock_response = MagicMock()
-        mock_response.response = "ok"
+        mock_response.response_text = "ok"
         mock_client = MagicMock()
         mock_client.task = AsyncMock(return_value=mock_response)
 
@@ -333,6 +396,248 @@ class TestToolDeclaration:
         assert "prompt" in (fd.parameters.required or [])
 
 
+# ── Tests: _execute_panel_tool ────────────────────────────────────────────────
+
+class TestExecutePanelTool:
+    """Tests for in-process panel tool execution (workspace mode canvas)."""
+
+    def test_show_markdown_sets_state(self, svc):
+        session = _make_session()
+        result = svc._execute_panel_tool(session, "show_markdown", {"content": "# Hello"})
+        assert result == "Panel updated."
+        assert session.panel_state["type"] == "markdown"
+        assert session.panel_state["content"] == "# Hello"
+        assert session.panel_state["title"] is None
+        assert session.panel_state["updated_at"] is not None
+
+    def test_show_markdown_with_title(self, svc):
+        session = _make_session()
+        svc._execute_panel_tool(session, "show_markdown", {"content": "body", "title": "My Title"})
+        assert session.panel_state["title"] == "My Title"
+
+    def test_update_panel_sets_html(self, svc):
+        session = _make_session()
+        svc._execute_panel_tool(session, "update_panel", {"html": "<b>bold</b>", "title": "Report"})
+        assert session.panel_state["type"] == "html"
+        assert session.panel_state["content"] == "<b>bold</b>"
+        assert session.panel_state["title"] == "Report"
+
+    def test_append_to_panel_concatenates(self, svc):
+        session = _make_session()
+        session.panel_state = {"type": "html", "content": "A", "title": None, "updated_at": None}
+        svc._execute_panel_tool(session, "append_to_panel", {"html": "B"})
+        assert session.panel_state["content"] == "AB"
+        assert session.panel_state["type"] == "html"
+
+    def test_append_to_panel_caps_at_max(self, svc):
+        session = _make_session()
+        # Pre-fill content just under the limit, then append enough to exceed it
+        session.panel_state = {
+            "type": "html",
+            "content": "x" * (_PANEL_CONTENT_MAX - 10),
+            "title": None,
+            "updated_at": None,
+        }
+        svc._execute_panel_tool(session, "append_to_panel", {"html": "y" * 100})
+        assert len(session.panel_state["content"]) == _PANEL_CONTENT_MAX
+        # The tail of the content should end with the appended "y"s
+        assert session.panel_state["content"].endswith("y" * 10)
+
+    def test_clear_panel_resets_state(self, svc):
+        session = _make_session()
+        session.panel_state = {"type": "html", "content": "old", "title": "t", "updated_at": "ts"}
+        svc._execute_panel_tool(session, "clear_panel", {})
+        assert session.panel_state["type"] == "empty"
+        assert session.panel_state["content"] == ""
+        assert session.panel_state["title"] is None
+
+    def test_panel_tool_routed_not_forwarded_to_agent(self, svc):
+        """Panel tools must not reach _execute_tool (no agent container call)."""
+        session = _make_session()
+        session._active = True
+        gemini_session = MagicMock()
+        gemini_session.send_tool_response = AsyncMock()
+        session._gemini_session = gemini_session
+        session._on_tool_call = None
+        session._on_tool_result = None
+
+        fc = MagicMock()
+        fc.id = "fc_panel"
+        fc.name = "show_markdown"
+        fc.args = {"content": "# Test"}
+
+        with patch.object(svc, "_execute_tool", AsyncMock()) as mock_exec:
+            _run(svc._execute_and_respond(session, "fc_panel", fc))
+            mock_exec.assert_not_awaited()
+
+        assert session.panel_state["type"] == "markdown"
+        gemini_session.send_tool_response.assert_awaited_once()
+
+    # ── #979: show_diagram (Mermaid) ─────────────────────────────────────────
+
+    def test_show_diagram_sets_mermaid_state(self, svc):
+        session = _make_session()
+        result = svc._execute_panel_tool(
+            session, "show_diagram", {"diagram": "graph TD; A-->B", "title": "Flow"}
+        )
+        assert result == "Panel updated."
+        assert session.panel_state["type"] == "mermaid"
+        assert session.panel_state["content"] == "graph TD; A-->B"
+        assert session.panel_state["title"] == "Flow"
+        assert session.panel_state["updated_at"] is not None
+
+    def test_show_diagram_missing_arg_defaults_empty(self, svc):
+        session = _make_session()
+        svc._execute_panel_tool(session, "show_diagram", {})
+        assert session.panel_state["type"] == "mermaid"
+        assert session.panel_state["content"] == ""
+
+    # ── #979: show_image (web URL + workspace path) ──────────────────────────
+
+    def test_show_image_web_url(self, svc):
+        session = _make_session()
+        result = svc._execute_panel_tool(
+            session, "show_image",
+            {"src": "https://example.com/chart.png", "caption": "A chart"},
+        )
+        assert result == "Panel updated."
+        assert session.panel_state["type"] == "image"
+        assert session.panel_state["image_kind"] == "url"
+        assert session.panel_state["content"] == "https://example.com/chart.png"
+        assert session.panel_state["caption"] == "A chart"
+
+    def test_show_image_relative_workspace_path_normalized(self, svc):
+        session = _make_session()
+        svc._execute_panel_tool(session, "show_image", {"src": "content/chart.png"})
+        assert session.panel_state["type"] == "image"
+        assert session.panel_state["image_kind"] == "path"
+        # Relative path resolved under the workspace root.
+        assert session.panel_state["content"] == f"{_WORKSPACE_ROOT}/content/chart.png"
+
+    def test_show_image_absolute_workspace_path(self, svc):
+        session = _make_session()
+        svc._execute_panel_tool(
+            session, "show_image", {"src": "/home/developer/content/a.png"}
+        )
+        assert session.panel_state["image_kind"] == "path"
+        assert session.panel_state["content"] == "/home/developer/content/a.png"
+
+    def test_show_image_tilde_is_workspace_relative(self, svc):
+        session = _make_session()
+        svc._execute_panel_tool(session, "show_image", {"src": "~/content/a.png"})
+        assert session.panel_state["image_kind"] == "path"
+        assert session.panel_state["content"] == f"{_WORKSPACE_ROOT}/content/a.png"
+
+    def test_show_image_empty_src_rejected(self, svc):
+        session = _make_session()
+        before = dict(session.panel_state)
+        result = svc._execute_panel_tool(session, "show_image", {"src": "   "})
+        assert "No image source" in result
+        # Panel unchanged on rejection.
+        assert session.panel_state == before
+
+    @pytest.mark.parametrize("bad_src", [
+        "../../etc/passwd",                       # relative traversal escapes root
+        "/home/developer/../etc/passwd",          # absolute traversal escapes root
+        "/etc/passwd",                            # outside the workspace entirely
+        "/home/developer-evil/secret",            # sibling-prefix escape (the startswith bug)
+        "data:image/png;base64,AAAA",             # inline data URI not allowed
+        "file:///etc/passwd",                     # non-http scheme not allowed
+        "ftp://host/x.png",                        # non-http scheme not allowed
+    ])
+    def test_show_image_rejects_unsafe_src(self, svc, bad_src):
+        session = _make_session()
+        before = dict(session.panel_state)
+        result = svc._execute_panel_tool(session, "show_image", {"src": bad_src})
+        assert "rejected" in result.lower() or "no image source" in result.lower()
+        # Panel state must NOT be updated for a rejected source.
+        assert session.panel_state == before
+
+
+# ── #979: _classify_image_src path-confinement unit tests ────────────────────
+
+class TestClassifyImageSrc:
+    """Direct tests of the show_image src classifier / confinement gate."""
+
+    @pytest.mark.parametrize("url", [
+        "http://example.com/a.png",
+        "https://example.com/a.png",
+        "HTTPS://EXAMPLE.COM/A.PNG",  # scheme match is case-insensitive
+    ])
+    def test_web_urls_classified_as_url(self, url):
+        out = _classify_image_src(url)
+        assert out is not None and out[1] == "url"
+        assert out[0] == url  # value preserved verbatim
+
+    def test_relative_path_resolved_under_root(self):
+        out = _classify_image_src("content/x.png")
+        assert out == (f"{_WORKSPACE_ROOT}/content/x.png", "path")
+
+    def test_root_itself_allowed(self):
+        out = _classify_image_src("/home/developer")
+        assert out == (_WORKSPACE_ROOT, "path")
+
+    @pytest.mark.parametrize("bad", [
+        "",
+        "../escape.png",
+        "/home/developer/../../etc/passwd",
+        "/etc/passwd",
+        "/home/developer-evil/x.png",  # the sibling-prefix bug this gate fixes
+        "data:text/html,<script>alert(1)</script>",
+        "file:///etc/passwd",
+        "javascript:alert(1)",         # has no scheme://, treated as path, escapes → rejected
+    ])
+    def test_unsafe_inputs_rejected(self, bad):
+        assert _classify_image_src(bad) is None
+
+
+# ── #979: new panel tools are registered + declared ──────────────────────────
+
+class TestNewPanelToolRegistration:
+
+    def test_new_tools_in_panel_tool_names(self):
+        assert "show_diagram" in _PANEL_TOOL_NAMES
+        assert "show_image" in _PANEL_TOOL_NAMES
+
+    def test_new_tools_declared(self):
+        from services.gemini_voice import _PANEL_TOOLS
+        names = {fd.name for fd in _PANEL_TOOLS.function_declarations}
+        assert "show_diagram" in names
+        assert "show_image" in names
+
+    def test_show_diagram_requires_diagram_arg(self):
+        from services.gemini_voice import _PANEL_TOOLS
+        fd = next(f for f in _PANEL_TOOLS.function_declarations if f.name == "show_diagram")
+        assert "diagram" in (fd.parameters.required or [])
+
+    def test_show_image_requires_src_arg(self):
+        from services.gemini_voice import _PANEL_TOOLS
+        fd = next(f for f in _PANEL_TOOLS.function_declarations if f.name == "show_image")
+        assert "src" in (fd.parameters.required or [])
+
+    def test_show_diagram_routed_not_forwarded_to_agent(self, svc):
+        """show_diagram executes in-process, never reaching the agent container."""
+        session = _make_session()
+        session._active = True
+        gemini_session = MagicMock()
+        gemini_session.send_tool_response = AsyncMock()
+        session._gemini_session = gemini_session
+        session._on_tool_call = None
+        session._on_tool_result = None
+
+        fc = MagicMock()
+        fc.id = "fc_diag"
+        fc.name = "show_diagram"
+        fc.args = {"diagram": "graph TD; A-->B"}
+
+        with patch.object(svc, "_execute_tool", AsyncMock()) as mock_exec:
+            _run(svc._execute_and_respond(session, "fc_diag", fc))
+            mock_exec.assert_not_awaited()
+
+        assert session.panel_state["type"] == "mermaid"
+        gemini_session.send_tool_response.assert_awaited_once()
+
+
 # ── Tests: end_session cancels pending tool tasks ─────────────────────────────
 
 class TestEndSession:
@@ -357,3 +662,136 @@ class TestEndSession:
         task = _run(run())
         assert task.cancelled() or task.done()
         assert len(session._pending_tool_tasks) == 0
+
+
+# ── Tests: Redis cross-worker session fallback (#704) ────────────────────────
+
+class TestRedisSessionFallback:
+    """
+    Tests for get_session() Redis cross-worker fallback (fix for #704).
+
+    With --workers 2, POST /voice/start stores the session in Worker A's
+    _sessions dict.  The subsequent WebSocket may hit Worker B, which has an
+    empty _sessions.  get_session() now falls back to Redis metadata and
+    reconstructs a VoiceSession so the ownership gate works on any worker.
+    """
+
+    def _make_redis_mock(self, return_value=None, side_effect=None):
+        redis_mock = AsyncMock()
+        if side_effect:
+            redis_mock.get = AsyncMock(side_effect=side_effect)
+        else:
+            redis_mock.get = AsyncMock(return_value=return_value)
+        redis_mock.setex = AsyncMock()
+        redis_mock.delete = AsyncMock()
+        return redis_mock
+
+    def test_get_session_returns_in_memory_first(self, svc):
+        """In-memory session is returned directly without a Redis call."""
+        session = _make_session()
+        svc._sessions[session.session_id] = session
+
+        redis_mock = self._make_redis_mock(return_value=None)
+        svc._get_redis = AsyncMock(return_value=redis_mock)
+
+        result = _run(svc.get_session(session.session_id))
+        assert result is session
+        redis_mock.get.assert_not_awaited()
+
+    def test_get_session_falls_back_to_redis(self, svc):
+        """Session absent from memory is reconstructed from Redis metadata."""
+        metadata = {
+            "session_id": "vs_remote",
+            "agent_name": "remote-agent",
+            "chat_session_id": "cs_remote",
+            "user_id": 42,
+            "user_email": "remote@example.com",
+            "voice_name": "Puck",
+            "workspace_mode": True,
+            "system_prompt": "You are remote.",
+        }
+        redis_mock = self._make_redis_mock(return_value=json.dumps(metadata))
+        svc._get_redis = AsyncMock(return_value=redis_mock)
+
+        result = _run(svc.get_session("vs_remote"))
+
+        assert result is not None
+        assert result.session_id == "vs_remote"
+        assert result.agent_name == "remote-agent"
+        assert result.user_id == 42
+        assert result.workspace_mode is True
+        # Stored in memory so subsequent calls skip Redis
+        assert svc._sessions.get("vs_remote") is result
+
+    def test_get_session_redis_miss_returns_none(self, svc):
+        """Redis returning None (key expired/missing) → get_session() returns None."""
+        redis_mock = self._make_redis_mock(return_value=None)
+        svc._get_redis = AsyncMock(return_value=redis_mock)
+
+        result = _run(svc.get_session("vs_missing"))
+        assert result is None
+
+    def test_get_session_redis_error_returns_none(self, svc):
+        """Redis connection failure is swallowed; get_session() degrades to None."""
+        redis_mock = self._make_redis_mock(side_effect=Exception("Redis unreachable"))
+        svc._get_redis = AsyncMock(return_value=redis_mock)
+
+        result = _run(svc.get_session("vs_error"))
+        assert result is None
+
+    def test_remove_session_deletes_redis_key(self, svc):
+        """remove_session() deletes the Redis key in addition to clearing in-memory state."""
+        session = _make_session()
+        svc._sessions[session.session_id] = session
+
+        redis_mock = self._make_redis_mock()
+        svc._get_redis = AsyncMock(return_value=redis_mock)
+
+        _run(svc.remove_session(session.session_id))
+
+        assert session.session_id not in svc._sessions
+        redis_mock.delete.assert_awaited_once_with(f"voice_session:{session.session_id}")
+
+    def test_create_session_writes_redis(self, svc):
+        """create_session() writes metadata to Redis with TTL = VOICE_MAX_DURATION + 60."""
+        # Import constant from config stub (avoids cross-session stub collision with
+        # test_voice_auth.py which replaces services.gemini_voice in sys.modules)
+        import config as _cfg
+        expected_ttl = _cfg.VOICE_MAX_DURATION + 60
+
+        redis_mock = self._make_redis_mock()
+        svc._get_redis = AsyncMock(return_value=redis_mock)
+
+        session = _run(svc.create_session(
+            agent_name="my-agent",
+            chat_session_id="cs_1",
+            user_id=7,
+            user_email="test@example.com",
+            system_prompt="Be helpful.",
+        ))
+
+        redis_mock.setex.assert_awaited_once()
+        key, ttl, value = redis_mock.setex.call_args[0]
+        assert key == f"voice_session:{session.session_id}"
+        assert ttl == expected_ttl
+        stored = json.loads(value)
+        assert stored["user_id"] == 7
+        assert stored["agent_name"] == "my-agent"
+        assert stored["system_prompt"] == "Be helpful."
+
+    def test_create_session_redis_failure_raises(self, svc):
+        """Redis write failure raises RuntimeError; session must not remain in memory."""
+        redis_mock = AsyncMock()
+        redis_mock.setex = AsyncMock(side_effect=Exception("Redis down"))
+        svc._get_redis = AsyncMock(return_value=redis_mock)
+
+        with pytest.raises(RuntimeError, match="Failed to persist"):
+            _run(svc.create_session(
+                agent_name="agent",
+                chat_session_id="cs_1",
+                user_id=1,
+                user_email="u@example.com",
+                system_prompt="prompt",
+            ))
+
+        assert len(svc._sessions) == 0

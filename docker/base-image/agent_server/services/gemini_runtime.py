@@ -9,6 +9,7 @@ import uuid
 import asyncio
 import subprocess
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
@@ -17,10 +18,19 @@ from fastapi import HTTPException
 
 from ..models import ExecutionLogEntry, ExecutionMetadata
 from ..state import agent_state
+from ..utils.subprocess_pgroup import EXECUTION_TAG_NAME
+from ..utils.orphan_sweep import kill_cgroup_orphans
 from .activity_tracking import start_tool_execution, complete_tool_execution
 from .runtime_adapter import AgentRuntime
 
 logger = logging.getLogger(__name__)
+
+# Single shared executor for subprocess reading. Mirrors the pattern in
+# claude_code.py:63 — one long-lived worker thread instead of a fresh
+# ThreadPoolExecutor per call. Per-call executors rely on CPython's weakref
+# callback to clean up the worker thread on GC, which is not deterministic
+# under load. #333 hardening.
+_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gemini-subproc")
 
 # Gemini pricing per 1K tokens (as of Dec 2024, from ai.google.dev/pricing)
 # Free tier has limits, but we calculate what it *would* cost
@@ -172,6 +182,12 @@ class GeminiRuntime(AgentRuntime):
 
             logger.info(f"Starting Gemini CLI: {' '.join(cmd[:5])}...")
 
+            # Issue #817: ensure execution_id is set so we can tag the
+            # Gemini subprocess and any descendants. Tag is inherited at
+            # every fork/exec/setsid, lets the post-wait sweep identify
+            # and kill orphans the same way the Claude path does.
+            execution_id = execution_id or str(uuid.uuid4())
+
             # Use Popen for real-time streaming
             process = subprocess.Popen(
                 cmd,
@@ -179,7 +195,8 @@ class GeminiRuntime(AgentRuntime):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1  # Line buffered
+                bufsize=1,  # Line buffered
+                env={**os.environ, EXECUTION_TAG_NAME: execution_id},
             )
 
             # Write prompt to stdin and close it
@@ -208,13 +225,29 @@ class GeminiRuntime(AgentRuntime):
                 # Wait for process to complete and get stderr
                 stderr = process.stderr.read()
                 return_code = process.wait()
+
+                # Issue #817 follow-up: cgroup-walk sweep for Gemini-
+                # spawned descendants that escaped via setsid, FD
+                # detachment, or env stripping. Best-effort — never
+                # fail the response on this path.
+                try:
+                    killed = kill_cgroup_orphans()
+                    if killed:
+                        logger.info(
+                            f"[Gemini] Cgroup sweep killed {killed} orphan(s) "
+                            f"after execution {execution_id} exit"
+                        )
+                except Exception:
+                    logger.exception(
+                        f"[Gemini] cgroup sweep raised after {execution_id} — "
+                        "continuing"
+                    )
+
                 return stderr, return_code
 
             # Run the blocking subprocess reading in a thread pool
-            from concurrent.futures import ThreadPoolExecutor
-            executor = ThreadPoolExecutor(max_workers=1)
             loop = asyncio.get_event_loop()
-            stderr_output, return_code = await loop.run_in_executor(executor, read_subprocess_output)
+            stderr_output, return_code = await loop.run_in_executor(_executor, read_subprocess_output)
 
             # Check for errors
             if return_code != 0:
@@ -572,14 +605,19 @@ class GeminiRuntime(AgentRuntime):
 
             logger.info(f"[Headless Task {session_id}] Starting Gemini CLI...")
 
-            # Use Popen for real-time streaming with timeout
+            # Use Popen for real-time streaming with timeout.
+            # Issue #817: TRINITY_EXECUTION_ID env var is inherited by every
+            # descendant across fork/exec/setsid/double-fork. The post-wait
+            # sweep below uses it to identify orphans the same way the Claude
+            # path does.
             process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                env={**os.environ, EXECUTION_TAG_NAME: session_id},
             )
 
             # Write prompt to stdin and close it
@@ -601,17 +639,42 @@ class GeminiRuntime(AgentRuntime):
                         self._process_stream_line(line, execution_log, metadata, tool_start_times, tool_names, response_parts, model)
                 except Exception as e:
                     logger.error(f"[Headless Task {session_id}] Error: {e}")
+                    # Issue #817 follow-up: even on error, run the cgroup
+                    # sweep so leaked descendants don't survive the failed
+                    # task.
+                    try:
+                        kill_cgroup_orphans()
+                    except Exception:
+                        logger.exception(
+                            f"[Headless Task {session_id}] cgroup sweep "
+                            "raised on error path — continuing"
+                        )
                     raise
 
                 stderr = process.stderr.read()
                 return_code = process.wait()
+
+                # Issue #817 follow-up: cgroup sweep catches descendants
+                # that escaped via setsid, FD detachment, or env
+                # stripping. Best-effort.
+                try:
+                    killed = kill_cgroup_orphans()
+                    if killed:
+                        logger.info(
+                            f"[Headless Task {session_id}] Cgroup sweep "
+                            f"killed {killed} orphan(s) after Gemini exit"
+                        )
+                except Exception:
+                    logger.exception(
+                        f"[Headless Task {session_id}] cgroup sweep raised "
+                        "— continuing"
+                    )
+
                 return stderr, return_code
 
             # Run the blocking subprocess reading in a thread pool
-            from concurrent.futures import ThreadPoolExecutor
-            executor = ThreadPoolExecutor(max_workers=1)
             loop = asyncio.get_event_loop()
-            stderr_output, return_code = await loop.run_in_executor(executor, read_subprocess_output)
+            stderr_output, return_code = await loop.run_in_executor(_executor, read_subprocess_output)
 
             # Check for errors
             if return_code != 0:
@@ -662,6 +725,18 @@ class GeminiRuntime(AgentRuntime):
         except TimeoutError as e:
             logger.error(f"[Headless Task] Timeout: {e}")
             raise HTTPException(status_code=504, detail=str(e))
+        except (BrokenPipeError, ConnectionResetError) as pipe_err:
+            # Subprocess stdin pipe closed before write completed — Gemini CLI
+            # child process exited early. Parallel surface to headless_executor.
+            # 502 not 503 to avoid SUB-003 auto-switch collision (#474).
+            logger.info(
+                f"[Headless Task] Subprocess pipe closed before write completed: {pipe_err}. "
+                f"This typically means the child Gemini process exited early."
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Agent subprocess closed before task could complete",
+            )
         except Exception as e:
             logger.error(f"[Headless Task] Execution error: {e}")
             raise HTTPException(status_code=500, detail=f"Task execution error: {str(e)}")

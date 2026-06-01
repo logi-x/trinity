@@ -33,10 +33,35 @@ CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
 EXECUTION_STALE_TIMEOUT_MINUTES = 120  # SCHED-ASYNC-001: increased from 30 to support long-running tasks
 ACTIVITY_STALE_TIMEOUT_MINUTES = 120  # SCHED-ASYNC-001: increased from 30 to support long-running tasks
 NO_SESSION_TIMEOUT_SECONDS = 60  # Issue #106: fast-fail executions that never got a Claude session
-WATCHDOG_HTTP_TIMEOUT = 5.0  # Timeout for agent HTTP calls during reconciliation
+WATCHDOG_HTTP_TIMEOUT = 15.0  # Timeout for agent HTTP calls during reconciliation (#869: increased from 5s to handle agents under load)
 WATCHDOG_MIN_AGE_SECONDS = 60  # Don't orphan-recover executions younger than this (dispatch window)
+STARTUP_RECOVERY_GRACE_SECONDS = 15  # #748: skip startup orphan-recovery for rows
+                                     # whose started_at is within this window — they
+                                     # may be from an in-flight /internal/execute-task
+                                     # call that races the backend startup.
+# #749: grace window for the Redis-side orphan-slot sweep. A slot whose
+# ZSET score (unix seconds, recorded at ZADD time) is within this many
+# seconds of "now" may belong to a concurrent /internal/execute-task
+# handler that has done its ZADD but not yet inserted the SQL row.
+# Symmetric with the SQL-side window in `recover_orphaned_executions`.
+SLOT_RECOVERY_GRACE_SECONDS = 15
+# Terminal SQL statuses that mean "the row is done; any matching Redis
+# slot is a leak." Mirrors the values in models.TaskExecutionStatus.
+_TERMINAL_EXECUTION_STATUSES = {"success", "failed", "cancelled", "skipped"}
+# #749: members starting with this prefix are drain sentinels used by
+# the capacity manager — not real executions — and must be skipped by
+# the orphan-slot sweep. Matches the canary S-01 filter
+# (`canary/invariants/s01_slot_row_bijection.py:DRAIN_PREFIX`).
+_DRAIN_SENTINEL_PREFIX = "drain-"
 ERROR_FETCH_TIMEOUT = 2.0  # Issue #286: short timeout for fetching error context from agent
 MAX_ERROR_MESSAGE_LENGTH = 2000  # Issue #286: truncate combined error messages
+# Issue #772: per-cycle row budget for retention sweeps. Caps the work each
+# 5-min tick performs so the first post-deploy backfill (potentially GB of
+# execution_log on production instances) is spread over hours, not held in a
+# single multi-minute write lock. At 5000 rows/cycle the worst observed prod
+# backlog (~9000 terminal rows past 30 days) drains in 2 cycles; for the
+# 90-day row-delete sweep on the same fleet that's roughly one cycle.
+RETENTION_CHUNK_SIZE_PER_CYCLE = 5000
 
 # WebSocket manager (injected from main.py)
 _ws_manager = None
@@ -46,6 +71,76 @@ def set_cleanup_ws_manager(manager):
     """Set the WebSocket manager for watchdog event broadcasting."""
     global _ws_manager
     _ws_manager = manager
+
+
+def _extract_agent_known_ids(payload: Dict) -> set:
+    """Set of execution IDs the agent considers 'known': currently-running
+    plus the recently-completed window (#921).
+
+    Single source of truth for parsing the `/api/executions/running`
+    response so the periodic watchdog (`_reconcile_orphaned_executions`)
+    and the startup recovery (`recover_orphaned_executions`) can't drift
+    out of sync. Defensive against malformed entries and missing fields:
+    older agent images that haven't shipped the buffer return only the
+    `executions` field — the union degrades silently to pre-#921 behaviour.
+    """
+    ids = {
+        eid for ex in (payload.get("executions") or [])
+        if (eid := ex.get("execution_id"))
+    }
+    ids.update(payload.get("recently_completed_ids") or [])
+    return ids
+
+
+def _read_retention_settings() -> tuple[int, int, int]:
+    """Read retention windows from ops settings (#772).
+
+    Returns:
+        (execution_log_retention_days, execution_row_retention_days,
+         health_check_retention_days). 0 means the sweep is disabled.
+        Invalid (non-integer or negative) values are coerced to 0 so a
+        malformed setting can't accidentally enable an unbounded prune.
+    """
+    from services.settings_service import OPS_SETTINGS_DEFAULTS
+
+    def _read(key: str) -> int:
+        raw = db.get_setting_value(key, OPS_SETTINGS_DEFAULTS.get(key, "0"))
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 0
+        return max(value, 0)
+
+    return (
+        _read("execution_log_retention_days"),
+        _read("execution_row_retention_days"),
+        _read("health_check_retention_days"),
+    )
+
+
+def _wal_checkpoint_truncate() -> None:
+    """Run PRAGMA wal_checkpoint(TRUNCATE) to return freed pages to the OS.
+
+    Called after retention sweeps reclaim measurable space. TRUNCATE mode is
+    safe under concurrent readers — it only blocks if another writer holds
+    the lock, in which case the checkpoint returns busy and we move on.
+    """
+    from db.connection import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        # PRAGMA result is (busy, log_pages, checkpointed) — log at debug
+        # only; non-zero busy is normal under contention.
+        try:
+            row = cursor.fetchone()
+            if row is not None:
+                logger.debug(
+                    "[Cleanup] wal_checkpoint(TRUNCATE) "
+                    f"busy={row[0]} log_pages={row[1]} checkpointed={row[2]}"
+                )
+        except Exception:
+            pass
 
 
 @dataclass
@@ -60,13 +155,24 @@ class CleanupReport:
     stale_slots: int = 0
     stale_slot_executions: int = 0  # Issue #219: executions failed when their slot was reclaimed
     shared_files_purged: int = 0  # C4 / FILES-001: expired or old-revoked file shares
+    # Issue #772: retention sweeps
+    execution_logs_pruned: int = 0
+    execution_rows_pruned: int = 0
+    health_checks_pruned: int = 0
+    # Issue #834 Phase 1a: soft-deleted agents purged past their retention window
+    soft_deleted_agents_purged: int = 0
+    # Issue #834 Phase 1b: soft-deleted schedules purged past their retention window
+    soft_deleted_schedules_purged: int = 0
 
     @property
     def total(self) -> int:
         return (self.orphaned_executions + self.auto_terminated +
                 self.stale_executions + self.no_session_executions +
                 self.orphaned_skipped + self.stale_activities + self.stale_slots +
-                self.stale_slot_executions + self.shared_files_purged)
+                self.stale_slot_executions + self.shared_files_purged +
+                self.execution_logs_pruned + self.execution_rows_pruned +
+                self.health_checks_pruned + self.soft_deleted_agents_purged +
+                self.soft_deleted_schedules_purged)
 
     def to_dict(self) -> Dict:
         return {
@@ -79,6 +185,11 @@ class CleanupReport:
             "stale_slots": self.stale_slots,
             "stale_slot_executions": self.stale_slot_executions,
             "shared_files_purged": self.shared_files_purged,
+            "execution_logs_pruned": self.execution_logs_pruned,
+            "execution_rows_pruned": self.execution_rows_pruned,
+            "health_checks_pruned": self.health_checks_pruned,
+            "soft_deleted_agents_purged": self.soft_deleted_agents_purged,
+            "soft_deleted_schedules_purged": self.soft_deleted_schedules_purged,
             "total": self.total,
         }
 
@@ -246,6 +357,167 @@ class CleanupService:
         except Exception as e:
             logger.error(f"[Cleanup] Error purging shared files: {e}")
 
+        # 4c. Issue #772: retention pruning for execution_log, execution rows,
+        # and agent_health_checks. All three obey the configurable retention
+        # window from ops settings; "0" disables the corresponding sweep.
+        # Per-cycle budget caps each sweep so the first post-deploy backfill
+        # spans multiple cycles instead of holding the write lock end-to-end.
+        try:
+            log_days, row_days, hc_days = _read_retention_settings()
+        except Exception as e:
+            logger.error(f"[Cleanup] Error reading retention settings: {e}")
+            log_days = row_days = hc_days = 0
+
+        if log_days > 0:
+            try:
+                pruned = db.prune_execution_logs(
+                    retention_days=log_days,
+                    chunk_size=RETENTION_CHUNK_SIZE_PER_CYCLE,
+                )
+                report.execution_logs_pruned = pruned
+                if pruned > 0:
+                    logger.info(
+                        f"[Cleanup] Nulled execution_log on {pruned} executions "
+                        f"older than {log_days} days (#772)"
+                    )
+            except Exception as e:
+                logger.error(f"[Cleanup] Error pruning execution_log: {e}")
+
+        if row_days > 0:
+            try:
+                pruned = db.prune_execution_rows(
+                    retention_days=row_days,
+                    chunk_size=RETENTION_CHUNK_SIZE_PER_CYCLE,
+                )
+                report.execution_rows_pruned = pruned
+                if pruned > 0:
+                    logger.info(
+                        f"[Cleanup] Deleted {pruned} schedule_executions rows "
+                        f"older than {row_days} days (#772)"
+                    )
+            except Exception as e:
+                logger.error(f"[Cleanup] Error pruning execution rows: {e}")
+
+        if hc_days > 0:
+            try:
+                pruned = db.cleanup_old_health_records(
+                    days=hc_days,
+                    chunk_size=RETENTION_CHUNK_SIZE_PER_CYCLE,
+                )
+                report.health_checks_pruned = pruned
+                if pruned > 0:
+                    logger.info(
+                        f"[Cleanup] Deleted {pruned} agent_health_checks rows "
+                        f"older than {hc_days} days (#772)"
+                    )
+            except Exception as e:
+                logger.error(f"[Cleanup] Error pruning health checks: {e}")
+
+        # 4c-bis. Issue #834 Phase 1a: hard-purge soft-deleted agents past
+        # their retention window. `purge_agent_ownership` runs the #816
+        # cascade_delete primitive so every per-agent child row goes with
+        # the parent in a single transaction. Bounded by the same
+        # 5000-row/cycle cap as the other sweeps so a backlog after a
+        # long-disabled retention setting drains gradually.
+        try:
+            from services.settings_service import OPS_SETTINGS_DEFAULTS
+
+            raw_sd_days = db.get_setting_value(
+                "agent_soft_delete_retention_days",
+                OPS_SETTINGS_DEFAULTS.get("agent_soft_delete_retention_days", "180"),
+            )
+            try:
+                sd_days = max(int(raw_sd_days), 0)
+            except (TypeError, ValueError):
+                sd_days = 0
+        except Exception as e:
+            logger.error(f"[Cleanup] Error reading agent retention setting: {e}")
+            sd_days = 0
+
+        if sd_days > 0:
+            try:
+                names = db.find_soft_deleted_agents_past_retention(
+                    retention_days=sd_days,
+                    limit=RETENTION_CHUNK_SIZE_PER_CYCLE,
+                )
+                purged = 0
+                for name in names:
+                    try:
+                        if db.purge_agent_ownership(name):
+                            purged += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"[Cleanup] Failed to purge soft-deleted agent {name}: {e}"
+                        )
+                report.soft_deleted_agents_purged = purged
+                if purged > 0:
+                    logger.info(
+                        f"[Cleanup] Hard-purged {purged} soft-deleted agent(s) "
+                        f"past {sd_days}-day retention (#834)"
+                    )
+            except Exception as e:
+                logger.error(f"[Cleanup] Error pruning soft-deleted agents: {e}")
+
+        # 4c-ter. Issue #834 Phase 1b: hard-purge soft-deleted schedules
+        # past their retention window. Unlike the agent purge, this does
+        # not chain into cascade_delete — schedules don't have child
+        # rows registered with #816 (schedule_executions are KEEP-policy
+        # via subscription_id rollups, and the per-schedule cleanup of
+        # executions belongs to #772's separate sweep).
+        try:
+            from services.settings_service import OPS_SETTINGS_DEFAULTS
+
+            raw_schedule_days = db.get_setting_value(
+                "schedule_soft_delete_retention_days",
+                OPS_SETTINGS_DEFAULTS.get("schedule_soft_delete_retention_days", "30"),
+            )
+            try:
+                schedule_days = max(int(raw_schedule_days), 0)
+            except (TypeError, ValueError):
+                schedule_days = 0
+        except Exception as e:
+            logger.error(f"[Cleanup] Error reading schedule retention setting: {e}")
+            schedule_days = 0
+
+        if schedule_days > 0:
+            try:
+                ids = db.find_soft_deleted_schedules_past_retention(
+                    retention_days=schedule_days,
+                    limit=RETENTION_CHUNK_SIZE_PER_CYCLE,
+                )
+                purged = 0
+                for sid in ids:
+                    try:
+                        if db.purge_schedule(sid):
+                            purged += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"[Cleanup] Failed to purge soft-deleted schedule {sid}: {e}"
+                        )
+                report.soft_deleted_schedules_purged = purged
+                if purged > 0:
+                    logger.info(
+                        f"[Cleanup] Hard-purged {purged} soft-deleted schedule(s) "
+                        f"past {schedule_days}-day retention (#834 Phase 1b)"
+                    )
+            except Exception as e:
+                logger.error(f"[Cleanup] Error pruning soft-deleted schedules: {e}")
+
+        # 4d. Issue #772: after a retention sweep reclaims meaningful space,
+        # truncate the WAL so the OS sees the free pages. Checkpoint is cheap
+        # and safe to run per-cycle when there's work to do; full VACUUM is
+        # gated to a daily off-peak job (see start()).
+        retention_total = (report.execution_logs_pruned
+                           + report.execution_rows_pruned
+                           + report.health_checks_pruned
+                           + report.soft_deleted_agents_purged
+                           + report.soft_deleted_schedules_purged)
+        if retention_total > 0:
+            try:
+                _wal_checkpoint_truncate()
+            except Exception as e:
+                logger.warning(f"[Cleanup] WAL checkpoint failed: {e}")
+
         self._cycle_count += 1
 
         self.last_run_at = utc_now_iso()
@@ -276,11 +548,13 @@ class CleanupService:
           FAILED, closing the window between Phase 0 and Phase 3.
         - Parallel fan-out via asyncio.gather (mirrors Phase 0 pattern at
           _reconcile_orphaned_executions).
-        - On agent unreachable: skip this cycle. Do NOT accumulate cross-cycle
-          state — slot_service.cleanup_stale_slots removes reclaimed IDs from
-          Redis permanently, so the same ID will not reappear in a later
-          cycle. The 120-min Phase 1 stale cleanup is the backstop for truly
-          stuck agents.
+        - On agent unreachable (#497): force-fail via the race-guarded
+          `fail_stale_slot_execution`. The slot was reclaimed by TTL, so
+          the execution is by construction older than `timeout + buffer`.
+          Waiting for the 120-min Phase 1 stale cleanup was leaving DB
+          rows as zombie `running` for up to 2 hours under sustained
+          partial-outage conditions. The race guard preserves any
+          SUCCESS that arrived between slot reclaim and this write.
         """
         if not reclaimed:
             return
@@ -317,13 +591,57 @@ class CleanupService:
 
                     # Just-in-time re-verify interpretation
                     if running_ids is None:
-                        # Agent unreachable during re-verify. Skip this cycle;
-                        # Phase 1 (120-min stale cleanup) is the backstop.
-                        logger.info(
-                            f"[Cleanup] Skipping {execution_id} for '{agent_name}' "
-                            f"— agent unreachable during re-verify (#378); "
-                            f"Phase 1 stale cleanup is fallback"
-                        )
+                        # Agent unreachable during re-verify (#497).
+                        #
+                        # The slot was already reclaimed by TTL — by
+                        # construction the execution is older than
+                        # `timeout_seconds + buffer`, which is Phase 1's
+                        # criterion at a much shorter window. Force-fail
+                        # via the race-guarded writer instead of waiting
+                        # the full 120-min Phase 1 stale-cleanup deadline.
+                        #
+                        # Race safety: `fail_stale_slot_execution` has a
+                        # `WHERE status='running'` guard, so a SUCCESS
+                        # that landed between the slot reclaim and this
+                        # write is preserved.
+                        #
+                        # Documented residual risk: if the agent later
+                        # recovers and writes SUCCESS via
+                        # `update_execution_status`, that path overwrites
+                        # FAILED per #378's design. The execution must
+                        # have run past its configured `timeout + buffer`
+                        # for the slot to be reclaimed in the first
+                        # place, so a "late SUCCESS" here represents a
+                        # deliverable that exceeded its budget.
+                        try:
+                            updated = db.fail_stale_slot_execution(
+                                execution_id=execution_id,
+                                error=(
+                                    f"Stale execution — agent '{agent_name}' "
+                                    f"unresponsive during cleanup re-verify, "
+                                    f"slot TTL expired (#497)"
+                                ),
+                            )
+                            if updated:
+                                report.stale_slot_executions += 1
+                                logger.info(
+                                    f"[Cleanup] Failed execution {execution_id} for "
+                                    f"agent '{agent_name}' "
+                                    f"(slot reclaimed, agent unreachable during re-verify)"
+                                )
+                            else:
+                                # Race-guard refused — a real terminal write
+                                # arrived first. Expected and benign.
+                                logger.debug(
+                                    f"[Cleanup] fail_stale_slot_execution declined "
+                                    f"for {execution_id} on '{agent_name}' "
+                                    f"(race-guard — already terminal)"
+                                )
+                        except Exception as e:
+                            logger.error(
+                                f"[Cleanup] Error failing {execution_id} after slot "
+                                f"reclaim (unreachable branch): {e}"
+                            )
                         continue
 
                     if execution_id in running_ids:
@@ -368,9 +686,17 @@ class CleanupService:
         """Reconcile DB execution state against agent process registries.
 
         For each execution marked 'running' in the DB:
-        1. Check if the agent's process registry still has it
-        2. If not found (orphaned): mark failed, release resources
+        1. Check if the agent's process registry still has it (including
+           the #921 recently-completed window — see `_get_agent_running_ids`)
+        2. If not found: mark failed, release resources
         3. If found but exceeded timeout: terminate, mark failed, release resources
+
+        Issue #921: the race between the agent's `finally: unregister()`
+        and the backend's `update_execution_status(SUCCESS)` is closed at
+        the source — agents include recently-completed IDs in their
+        `/api/executions/running` response. The watchdog therefore needs
+        no two-cycle confirmation: a single observation of "missing from
+        agent + DB still running" is a true orphan.
 
         Returns:
             Tuple of (orphaned_count, auto_terminated_count, confirmed_running_ids)
@@ -431,7 +757,11 @@ class CleanupService:
                                 )
                                 continue
 
-                            # Orphan: execution not found on agent
+                            # Orphan: missing from agent's running + recently-
+                            # completed sets. The agent-side window in
+                            # `process_registry.list_recently_completed_ids`
+                            # already absorbed the success-write race (#921),
+                            # so this is a true orphan.
                             recovery_attempts += 1
                             error_msg = (
                                 "Execution completed on agent but status not reported "
@@ -443,7 +773,7 @@ class CleanupService:
                             if recovered:
                                 orphaned_count += 1
                         else:
-                            # Execution is on agent — check timeout
+                            # Execution is on agent — check timeout.
                             timeout_seconds = ex.get("timeout_seconds") or 900
 
                             if age_seconds <= timeout_seconds:
@@ -508,9 +838,9 @@ class CleanupService:
                 f"http://agent-{agent_name}:8000/api/executions/running"
             )
             if response.status_code == 200:
-                data = response.json()
-                executions = data.get("executions", [])
-                return {eid for ex in executions if (eid := ex.get("execution_id"))}
+                # #921: union of currently-running + recently-completed via
+                # the shared helper — same parsing as `recover_orphaned_executions`.
+                return _extract_agent_known_ids(response.json())
             else:
                 logger.warning(
                     f"[Watchdog] Agent '{agent_name}' returned {response.status_code} "
@@ -721,22 +1051,83 @@ class CleanupService:
 cleanup_service = CleanupService()
 
 
+# ---------------------------------------------------------------------------
+# Startup-recovery readiness flag (#748)
+# ---------------------------------------------------------------------------
+# Set False at module load; flipped True at the end of
+# recover_orphaned_executions(). The /internal/execute-task router returns
+# 503 while False so the scheduler retries instead of racing recovery with
+# a slot ZADD on a row that's about to be flipped to FAILED.
+
+_startup_recovery_complete: bool = False
+
+
+def is_startup_recovery_complete() -> bool:
+    """Return True once startup orphan-recovery has finished (#748).
+
+    The internal task-execution route uses this as a gate: while False, the
+    backend is still in the window where startup recovery may flip in-flight
+    rows to FAILED. Returning 503 lets the scheduler retry once the gate
+    opens, instead of leaking a Redis capacity slot on the doomed row.
+    """
+    return _startup_recovery_complete
+
+
+def mark_startup_recovery_complete() -> None:
+    """Set the warming-up gate to admit /internal/execute-task calls (#748)."""
+    global _startup_recovery_complete
+    _startup_recovery_complete = True
+
+
+def reset_startup_recovery_flag_for_tests() -> None:
+    """Test-only helper: revert the gate to its pre-recovery state."""
+    global _startup_recovery_complete
+    _startup_recovery_complete = False
+
+
 async def recover_orphaned_executions() -> Dict:
     """Recover orphaned task executions on backend startup.
 
-    Checks each 'running' schedule execution against the agent's container
-    and process registry. Executions not found on the agent are marked failed
-    and their capacity slots released.
+    Two passes:
+
+      1. SQL→Redis (legacy): for each 'running' schedule execution row,
+         check the agent's container and process registry — if missing,
+         mark the row failed and release any capacity slot.
+      2. Redis→SQL (#749): scan ``agent:slots:*`` for members whose SQL
+         row is terminal or missing and ZREM them. Necessary because a
+         backend kill between slot ZADD and the finally-block ZREM leaves
+         the slot leaked, and the SQL→Redis pass cannot see Redis-only
+         orphans.
+
+    #748: rows whose ``started_at`` is younger than
+    ``STARTUP_RECOVERY_GRACE_SECONDS`` are *skipped* — they may be from a
+    ``/internal/execute-task`` call that the scheduler queued while the
+    backend was still booting and that is about to ZADD a capacity slot.
+    Failing such a row would race the handler and leave a permanently
+    leaked Redis slot. The skipped row is handled either by the regular
+    watchdog cycle (which uses the same grace window) or by the now-late
+    handler completing normally.
 
     Returns:
-        Dict with recovered, still_running, and errors counts.
+        Dict with recovered, still_running, skipped_grace, errors, and
+        redis_slots_reclaimed counts.
     """
     from services.agent_client import AgentClientError, get_agent_client
     from services.docker_service import get_agent_container
 
     running = db.get_running_executions()
     if not running:
-        return {"recovered": 0, "still_running": 0, "errors": 0}
+        # #749: still run the Redis-side sweep — orphan slots can exist
+        # even when SQL has zero running rows (that is in fact the
+        # textbook symptom of the kill-between-ZADD-and-ZREM bug).
+        redis_reclaimed = await _reconcile_orphaned_slots()
+        return {
+            "recovered": 0,
+            "still_running": 0,
+            "skipped_grace": 0,
+            "errors": 0,
+            "redis_slots_reclaimed": sum(redis_reclaimed.values()),
+        }
 
     capacity = get_capacity_manager()
 
@@ -747,6 +1138,7 @@ async def recover_orphaned_executions() -> Dict:
 
     recovered = 0
     still_running = 0
+    skipped_grace = 0
     errors = 0
 
     for agent_name, executions in by_agent.items():
@@ -755,6 +1147,9 @@ async def recover_orphaned_executions() -> Dict:
         if not container or container.status != "running":
             # Container down — all executions for this agent are orphaned
             for execution in executions:
+                if _within_startup_grace(execution):
+                    skipped_grace += 1
+                    continue
                 if await _recover_execution(execution, agent_name, capacity):
                     recovered += 1
                 else:
@@ -762,20 +1157,23 @@ async def recover_orphaned_executions() -> Dict:
             continue
 
         # Container is up — check agent's process registry
-        registry_ids: set[str] = set()
+        registry_ids: set = set()
         try:
             client = get_agent_client(agent_name)
             resp = await client.get("/api/executions/running", timeout=5.0)
             if resp.status_code == 200:
-                registry_ids = {
-                    e["execution_id"] for e in resp.json().get("executions", [])
-                }
+                # #921: same union as the periodic watchdog — includes
+                # recently-completed IDs so a backend restart that races
+                # an in-flight completion doesn't false-orphan it.
+                registry_ids = _extract_agent_known_ids(resp.json())
         except AgentClientError as e:
             logger.warning(f"[Recovery] Could not reach agent {agent_name} registry: {e}")
 
         for execution in executions:
             if execution["id"] in registry_ids:
                 still_running += 1
+            elif _within_startup_grace(execution):
+                skipped_grace += 1
             else:
                 if await _recover_execution(execution, agent_name, capacity):
                     recovered += 1
@@ -784,9 +1182,44 @@ async def recover_orphaned_executions() -> Dict:
 
     logger.info(
         f"[Recovery] Task execution recovery complete: "
-        f"recovered={recovered}, still_running={still_running}, errors={errors}"
+        f"recovered={recovered}, still_running={still_running}, "
+        f"skipped_grace={skipped_grace}, errors={errors}"
     )
-    return {"recovered": recovered, "still_running": still_running, "errors": errors}
+
+    # #749: complete the asymmetric pair. The SQL→Redis pass above flips
+    # SQL rows to FAILED when Redis lost their slot; the Redis→SQL pass
+    # below ZREMs slots whose SQL row is terminal or missing (e.g. backend
+    # killed between ZADD and ZREM). Without this pass the leaked slot
+    # persists until 1200s TTL or the next acquire on this agent.
+    redis_reclaimed = await _reconcile_orphaned_slots()
+    redis_reclaimed_total = sum(redis_reclaimed.values())
+
+    return {
+        "recovered": recovered,
+        "still_running": still_running,
+        "skipped_grace": skipped_grace,
+        "errors": errors,
+        "redis_slots_reclaimed": redis_reclaimed_total,
+    }
+
+
+def _within_startup_grace(execution: Dict) -> bool:
+    """Return True if the execution's started_at is within the startup grace window.
+
+    Mirrors the WATCHDOG_MIN_AGE_SECONDS pattern at the regular-cycle path
+    (cleanup_service.py:609). Rows are skipped instead of failed during
+    startup recovery so an in-flight ``/internal/execute-task`` call cannot
+    race the recovery flip and leak a slot (#748).
+    """
+    raw = execution.get("started_at")
+    if not raw:
+        # No timestamp — be conservative and allow recovery to proceed.
+        return False
+    try:
+        age_seconds = (utc_now() - parse_iso_timestamp(raw)).total_seconds()
+    except Exception:
+        return False
+    return age_seconds < STARTUP_RECOVERY_GRACE_SECONDS
 
 
 async def _recover_execution(execution: Dict, agent_name: str, capacity) -> bool:
@@ -803,3 +1236,117 @@ async def _recover_execution(execution: Dict, agent_name: str, capacity) -> bool
     except Exception as e:
         logger.error(f"[Recovery] Error recovering execution {execution['id']}: {e}")
         return False
+
+
+async def _reconcile_orphaned_slots() -> Dict[str, int]:
+    """Sweep Redis for slot members that have no live SQL execution (#749).
+
+    SQL→Redis recovery (the existing path in `recover_orphaned_executions`)
+    flips SQL rows to FAILED when Redis lost their slot. It is asymmetric —
+    it doesn't catch the inverse leak, where Redis still holds a slot for an
+    execution whose SQL row is either terminal (someone wrote SUCCESS /
+    FAILED already) or missing entirely. That happens whenever the backend
+    is killed between `capacity.acquire()` (ZADD) and the `finally`-block
+    `capacity.release()` (ZREM): the in-flight handler dies, the slot
+    stays. The canary S-01 invariant (Issue #411) detects exactly this
+    shape; rows #26/#27/#28 in `canary_violations` reproduced it three
+    cycles in a row during the same incident as #748.
+
+    For each Redis slot member we:
+
+      - skip drain sentinels (members starting with ``drain-``) — they
+        are not executions;
+      - skip members whose ZSET score is within
+        ``SLOT_RECOVERY_GRACE_SECONDS`` of "now" — they may belong to a
+        concurrent /internal/execute-task handler that has done its ZADD
+        but not yet committed the SQL row (mirrors the SQL-side grace
+        window in #748);
+      - look up the execution by id in SQL: if the row is missing or its
+        status is terminal (success/failed/cancelled/skipped), the slot
+        is orphaned → ZREM the member and DELETE its metadata key.
+
+    Returns a dict ``{agent_name: int}`` counting reclaimed slots per
+    agent. Never raises — Redis-unreachable errors are logged and the
+    call returns whatever was reclaimed before the failure.
+    """
+    import time
+
+    from services.slot_service import get_slot_service
+
+    try:
+        slot_service = get_slot_service()
+    except Exception as e:
+        logger.error(f"[Recovery] Slot service unavailable; skipping Redis sweep: {e}")
+        return {}
+
+    redis_client = slot_service.redis
+    prefix = slot_service.slots_prefix
+    grace_cutoff = time.time() - SLOT_RECOVERY_GRACE_SECONDS
+
+    reclaimed: Dict[str, int] = {}
+
+    # SCAN the agent:slots:* keyspace (matches canary/snapshot.py:325 and
+    # slot_service.cleanup_stale_slots — same SCAN pattern, count=200 to
+    # keep network round-trips low under fleet scale).
+    cursor = 0
+    try:
+        while True:
+            cursor, keys = redis_client.scan(cursor=cursor, match=f"{prefix}*", count=200)
+            for key in keys:
+                # decode_responses=True → key is str.
+                agent_name = key[len(prefix):]
+                try:
+                    members_with_scores = redis_client.zrange(
+                        key, 0, -1, withscores=True
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[Recovery] ZRANGE failed for {key}: {exc}"
+                    )
+                    continue
+
+                for execution_id, score in members_with_scores:
+                    if execution_id.startswith(_DRAIN_SENTINEL_PREFIX):
+                        continue
+                    if float(score) >= grace_cutoff:
+                        # In the grace window — may be an in-flight ZADD
+                        # whose SQL row hasn't been written yet.
+                        continue
+
+                    row = db.get_execution(execution_id)
+                    if row is not None and row.status not in _TERMINAL_EXECUTION_STATUSES:
+                        # Still active — leave the slot alone.
+                        continue
+
+                    # Orphan: SQL row missing OR terminal. Reclaim the slot.
+                    try:
+                        removed = redis_client.zrem(key, execution_id)
+                        if removed:
+                            metadata_key = slot_service._metadata_key(
+                                agent_name, execution_id
+                            )
+                            redis_client.delete(metadata_key)
+                            reclaimed[agent_name] = reclaimed.get(agent_name, 0) + 1
+                            logger.info(
+                                f"[Recovery] Reclaimed orphan slot: agent='{agent_name}' "
+                                f"execution_id='{execution_id}' "
+                                f"sql_status={'<missing>' if row is None else row.status}"
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            f"[Recovery] ZREM failed for {key}/{execution_id}: {exc}"
+                        )
+
+            if cursor == 0:
+                break
+    except Exception as e:
+        # SCAN itself blew up — return partial results.
+        logger.error(f"[Recovery] Redis SCAN failed during orphan-slot sweep: {e}")
+
+    total = sum(reclaimed.values())
+    if total:
+        logger.info(
+            f"[Recovery] Orphan-slot sweep reclaimed {total} slot(s) across "
+            f"{len(reclaimed)} agent(s)"
+        )
+    return reclaimed

@@ -182,7 +182,8 @@ class TestGetRunningExecutionsWithAgentInfo:
             CREATE TABLE agent_ownership (
                 agent_name TEXT PRIMARY KEY,
                 owner_id INTEGER NOT NULL,
-                execution_timeout_seconds INTEGER DEFAULT 900
+                execution_timeout_seconds INTEGER DEFAULT 900,
+                deleted_at TEXT  -- #834: read paths filter `WHERE deleted_at IS NULL`
             )
         """)
         conn.commit()
@@ -420,7 +421,14 @@ class TestReconcileOrphanedExecutions:
     @patch("services.cleanup_service.db")
     @patch("services.cleanup_service.get_capacity_manager")
     def test_orphan_not_found_on_agent(self, mock_capacity_fn, mock_db, mock_httpx):
-        """Execution not found on agent -> orphan recovery."""
+        """Execution not found in agent's running + recently-completed sets
+        => orphan recovery on a single cycle.
+
+        Issue #921: the natural-completion race is closed agent-side by
+        `process_registry.list_recently_completed_ids`, so a single
+        observation of "missing from agent" is a true orphan and we
+        recover immediately. No two-cycle confirmation needed.
+        """
         mock_cm, _ = self._mock_httpx_client()
         mock_httpx.return_value = mock_cm
 
@@ -538,7 +546,15 @@ class TestReconcileOrphanedExecutions:
     @patch("services.cleanup_service.db")
     @patch("services.cleanup_service.get_capacity_manager")
     def test_race_condition_db_update_noop(self, mock_capacity_fn, mock_db, mock_httpx):
-        """When DB update returns False (race), skip slot/queue release."""
+        """When the conditional UPDATE in mark_execution_failed_by_watchdog
+        returns False (the DB row transitioned to a terminal state between
+        the agent query and the recovery write), skip slot/queue release.
+
+        With #921's agent-side completion buffer this narrow TOCTOU is
+        extremely unlikely (the agent's `recently_completed_ids` already
+        absorbs the race), but the conditional UPDATE remains as defence
+        in depth — this test locks in that the no-op path is honoured.
+        """
         mock_cm, _ = self._mock_httpx_client()
         mock_httpx.return_value = mock_cm
 
@@ -594,6 +610,113 @@ class TestReconcileOrphanedExecutions:
         assert orphaned == 1
         assert confirmed_running == set()
         assert mock_db.mark_execution_failed_by_watchdog.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Agent /api/executions/running response shape (Issue #921)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractAgentKnownIds:
+    """Direct tests for `_extract_agent_known_ids` — the shared seam between
+    the periodic watchdog and the startup-recovery pass. Locks in the
+    parsing contract so the two callers can't drift out of sync."""
+
+    pytestmark = pytest.mark.unit
+
+    @staticmethod
+    def _fn():
+        from services.cleanup_service import _extract_agent_known_ids
+        return _extract_agent_known_ids
+
+    def test_unions_running_and_recently_completed(self):
+        ids = self._fn()({
+            "executions": [{"execution_id": "live-1"}, {"execution_id": "live-2"}],
+            "recently_completed_ids": ["done-1", "done-2"],
+        })
+        assert ids == {"live-1", "live-2", "done-1", "done-2"}
+
+    def test_missing_recently_completed_degrades_to_pre_921(self):
+        ids = self._fn()({"executions": [{"execution_id": "live-1"}]})
+        assert ids == {"live-1"}
+
+    def test_empty_response_returns_empty_set(self):
+        assert self._fn()({}) == set()
+
+    def test_null_fields_treated_as_empty(self):
+        """Defensive against agents that explicitly send null for either
+        field — `None` instead of `[]`."""
+        ids = self._fn()({"executions": None, "recently_completed_ids": None})
+        assert ids == set()
+
+    def test_skips_entries_missing_execution_id(self):
+        """Malformed execution entries (no `execution_id` key) are dropped
+        rather than raising. Defensive — protects against partial server
+        responses or schema drift."""
+        ids = self._fn()({
+            "executions": [
+                {"execution_id": "live-1"},
+                {"started_at": "2026-05-25T00:00:00Z"},  # no execution_id
+            ],
+            "recently_completed_ids": ["done-1"],
+        })
+        assert ids == {"live-1", "done-1"}
+
+
+class TestGetAgentRunningIdsUnionsRecentlyCompleted:
+    """`_get_agent_running_ids` is the seam #921 hangs on: it unions the
+    `executions` field with `recently_completed_ids` from the agent's
+    response, so the watchdog treats "just finished on the agent" the
+    same as "still running" — no race-window false orphan."""
+
+    pytestmark = pytest.mark.unit
+
+    @staticmethod
+    def _service():
+        from services.cleanup_service import CleanupService
+        return CleanupService()
+
+    @staticmethod
+    def _mock_response(payload: dict, status_code: int = 200):
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json = MagicMock(return_value=payload)
+        return resp
+
+    def test_unions_running_and_recently_completed(self):
+        import asyncio
+        service = self._service()
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=self._mock_response({
+            "executions": [{"execution_id": "live-1"}, {"execution_id": "live-2"}],
+            "recently_completed_ids": ["done-1", "done-2"],
+        }))
+        ids = asyncio.run(service._get_agent_running_ids(client, "agent-x"))
+        assert ids == {"live-1", "live-2", "done-1", "done-2"}
+
+    def test_missing_recently_completed_field_is_tolerated(self):
+        """Older agent images that haven't shipped the recently-completed
+        buffer return only `executions`. The watchdog must degrade
+        gracefully to the pre-#921 behaviour for those images."""
+        import asyncio
+        service = self._service()
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=self._mock_response({
+            "executions": [{"execution_id": "live-1"}],
+        }))
+        ids = asyncio.run(service._get_agent_running_ids(client, "agent-x"))
+        assert ids == {"live-1"}
+
+    def test_empty_recently_completed_returns_running_only(self):
+        import asyncio
+        service = self._service()
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=self._mock_response({
+            "executions": [{"execution_id": "live-1"}],
+            "recently_completed_ids": [],
+        }))
+        ids = asyncio.run(service._get_agent_running_ids(client, "agent-x"))
+        assert ids == {"live-1"}
 
 
 # ---------------------------------------------------------------------------
@@ -987,15 +1110,21 @@ class TestProcessStaleSlotReclaims:
 
     @patch("services.cleanup_service.httpx.AsyncClient")
     @patch("services.cleanup_service.db")
-    def test_skips_when_agent_unreachable(self, mock_db, mock_httpx):
-        """Re-verify returns None (agent unreachable) → skip this cycle.
-        Phase 1's 120-min stale cleanup is the backstop for truly stuck
-        agents — we do NOT maintain cross-cycle defer state because
-        cleanup_stale_slots removes reclaimed IDs from Redis permanently."""
+    def test_force_fails_when_agent_unreachable(self, mock_db, mock_httpx):
+        """Re-verify returns None (agent unreachable) → force-fail via the
+        race-guarded writer (#497). The slot was reclaimed by TTL, so the
+        execution is by definition older than ``timeout + buffer``; waiting
+        for Phase 1's 120-min stale cleanup was leaving zombie `running`
+        rows for up to 2 hours under sustained partial-outage.
+
+        Race safety is preserved via ``fail_stale_slot_execution``'s
+        ``WHERE status='running'`` guard — a real terminal write that
+        landed between the slot reclaim and this cleanup write wins."""
         mock_httpx.return_value.__aenter__ = AsyncMock(
             return_value=AsyncMock()
         )
         mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_db.fail_stale_slot_execution.return_value = True
 
         service = self._make_service()
         service._get_agent_running_ids = AsyncMock(return_value=None)
@@ -1006,9 +1135,15 @@ class TestProcessStaleSlotReclaims:
 
         asyncio.run(service._process_stale_slot_reclaims(reclaimed, set(), report))
 
-        mock_db.fail_stale_slot_execution.assert_not_called()
+        # Force-fail must fire; terminate is skipped (agent unreachable
+        # → we can't talk to it anyway).
+        mock_db.fail_stale_slot_execution.assert_called_once()
+        call_kwargs = mock_db.fail_stale_slot_execution.call_args.kwargs
+        assert call_kwargs["execution_id"] == "exec-1"
+        err = call_kwargs["error"].lower()
+        assert "unresponsive" in err or "unreachable" in err
         service._terminate_on_agent.assert_not_called()
-        assert report.stale_slot_executions == 0
+        assert report.stale_slot_executions == 1
 
     @patch("services.cleanup_service.httpx.AsyncClient")
     @patch("services.cleanup_service.db")
@@ -1074,8 +1209,9 @@ class TestProcessStaleSlotReclaims:
     @patch("services.cleanup_service.db")
     def test_one_agent_raises_others_proceed(self, mock_db, mock_httpx):
         """One agent's re-verify raises → asyncio.gather(return_exceptions=True)
-        captures it → that agent's execs are skipped as unreachable;
-        other agents proceed normally."""
+        captures it → per-agent error isolation. The raising agent's execs
+        are force-failed via the unreachable branch (#497); other agents'
+        execs follow the standard re-verify path."""
         mock_httpx.return_value.__aenter__ = AsyncMock(
             return_value=AsyncMock()
         )
@@ -1098,7 +1234,12 @@ class TestProcessStaleSlotReclaims:
 
         asyncio.run(service._process_stale_slot_reclaims(reclaimed, set(), report))
 
-        # Only agent-b's exec was failed; agent-a treated as unreachable
-        mock_db.fail_stale_slot_execution.assert_called_once()
-        assert mock_db.fail_stale_slot_execution.call_args.kwargs["execution_id"] == "exec-b1"
-        assert report.stale_slot_executions == 1
+        # Both execs failed: exec-a1 via the unreachable branch (#497),
+        # exec-b1 via the standard re-verify-says-inactive branch.
+        assert mock_db.fail_stale_slot_execution.call_count == 2
+        failed_ids = {
+            call.kwargs["execution_id"]
+            for call in mock_db.fail_stale_slot_execution.call_args_list
+        }
+        assert failed_ids == {"exec-a1", "exec-b1"}
+        assert report.stale_slot_executions == 2

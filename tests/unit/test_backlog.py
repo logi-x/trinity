@@ -122,7 +122,8 @@ def tmp_db(tmp_path, monkeypatch):
             owner_id INTEGER,
             max_parallel_tasks INTEGER DEFAULT 3,
             execution_timeout_seconds INTEGER DEFAULT 900,
-            max_backlog_depth INTEGER DEFAULT 50
+            max_backlog_depth INTEGER DEFAULT 50,
+            deleted_at TEXT  -- #834: read paths filter `WHERE deleted_at IS NULL`
         )
         """
     )
@@ -136,14 +137,24 @@ def tmp_db(tmp_path, monkeypatch):
     # Re-import modules that read DB_PATH at import time, so the new env var
     # takes effect for this test. Use importlib to avoid polluting sys.modules
     # between tests.
-    for mod in (
-        "db.connection",
-        "db.schedules",
-        "db.agent_settings.resources",
-    ):
-        sys.modules.pop(mod, None)
+    def _evict():
+        for mod in (
+            "db.connection",
+            "db.schedules",
+            "db.agent_settings.resources",
+            # database.py captures DB_PATH transitively via db.connection;
+            # evict it on teardown too so the next test file (e.g.
+            # test_file_upload) doesn't load `database.db` against this
+            # fixture's partial schema. (#660)
+            "database",
+        ):
+            sys.modules.pop(mod, None)
 
-    yield db_path
+    _evict()
+    try:
+        yield db_path
+    finally:
+        _evict()
 
 
 @pytest.fixture

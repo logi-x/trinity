@@ -486,7 +486,7 @@ task_response.raw_response           # Original response dict
 
 **Note**: The `task()` method was added on 2025-01-02 to fix execution log viewer compatibility. It calls `/api/task` which returns raw Claude Code `stream-json` format, unlike `chat()` which calls `/api/chat` and returns a simplified format.
 
-#### Response Data Classes (`src/backend/services/agent_client.py:126-152`)
+#### Response Data Classes (`src/backend/services/agent_client.py:528-544`)
 
 ```python
 @dataclass
@@ -508,7 +508,7 @@ class AgentChatResponse:
     raw_response: Dict[str, Any]
 ```
 
-#### Response Parsing Logic (`src/backend/services/agent_client.py:435-484`)
+#### Response Parsing Logic (`src/backend/services/agent_client.py:907-958`)
 
 The `_parse_chat_response()` method centralizes response parsing:
 
@@ -682,7 +682,7 @@ The queue management endpoints use a **thin router + service layer** architectur
 | File | Lines | Purpose |
 |------|-------|---------|
 | `src/backend/services/execution_queue.py` | 244 | Redis-backed queue implementation |
-| `src/backend/services/agent_client.py` | 662 | Centralized agent HTTP client (circuit breaker, retry, connection pool — RELIABILITY-001) |
+| `src/backend/services/agent_client.py` | 1130 | Centralized agent HTTP client (Redis-backed circuit breaker, retry, connection pool, per-base_url drop-grace — RELIABILITY-001 / #631 / #474) |
 | `src/scheduler/service.py` | - | Dedicated scheduler (APScheduler, activity tracking) |
 | `src/scheduler/agent_client.py` | - | Scheduler's agent HTTP client |
 | `src/backend/routers/chat.py` | 1004 | Chat endpoint (uses raw httpx with retry) |
@@ -1174,11 +1174,13 @@ See [execution-termination.md](execution-termination.md) for full documentation.
 
 | Date | Changes |
 |------|---------|
+| 2026-05-13 | **Circuit Breaker Sibling-Collapse Fix (#474)**: `AgentClient._request()` in `services/agent_client.py` rewritten to neutralise the burst-collapse where one mid-flight transport drop in a concurrent fan-out tripped the breaker. Added per-base_url `_recent_drops: Dict[str, float]` map with `_DROP_GRACE_SEC = 2.0` window (lines 442-473), helpers `_stamp_drop()` / `_is_within_drop_grace()` / `_build_http_client()` / `_acquire_client() -> (client, is_pooled)` (lines 462-514), and new exception `AgentConnectionDroppedError(AgentNotReachableError)` (lines 570-578). The rewritten exception handler in `_request()` (lines 671-727) now: (a) on `ConnectError` / `TimeoutException` within the drop-grace window, raises `AgentConnectionDroppedError` instead of `AgentNotReachableError` and skips `record_failure()`; (b) on `ReadError` / `WriteError` / `RemoteProtocolError` / `BrokenPipeError` / `ConnectionResetError` mid-flight, stamps the drop, evicts the pooled client only if its identity matches the one this worker acquired (`evicted is client` guard, prevents siblings double-closing), and raises `AgentConnectionDroppedError` — again no `record_failure()`. Non-pooled (in-grace) clients are single-use and `aclose()`'d in `finally` to prevent connection-handle leaks during sustained bursts. The grace map and pool are process-local (per uvicorn worker); the Redis-backed `CircuitState` from #631 remains the fleet-wide source of truth — transport drops never call `record_failure()` in any worker. `AgentConnectionDroppedError` inherits from `AgentNotReachableError` so tenacity `retry_if_exception_type` decorators on `get_session()` / `health_check()` continue to handle it. Solves the 10-concurrent-call scenario where one drop evicts the shared pool and sibling fresh-client retries die with `ConnectError`, previously tripping 9-of-10 sibling failures into the breaker. Tests: `tests/integration/test_circuit_breaker.py` (cross-worker burst scenarios), `tests/unit/test_circuit_breaker.py` (drop-grace state machine, pool-eviction identity check, `AgentConnectionDroppedError` raising). |
 | 2026-02-21 | **Bug Fix (EXEC-023)**: Fixed `DatabaseManager.update_execution_status()` wrapper in `src/backend/database.py:1295-1299` - was missing `claude_session_id` parameter. The wrapper now correctly forwards the parameter to `db/schedules.py:update_execution_status()` (lines 559-610). This affected all execution status updates (chat, task, scheduled) that tried to store Claude Code session IDs for the "Continue Execution as Chat" feature. |
 | 2026-03-15 | **Unified chat execution tracking (#96)**: All `/api/chat` calls now create `schedule_executions` records, not just MCP/agent-to-agent. User chats use `triggered_by=chat`. Execution records are updated on success/failure for all chat types. |
 | 2026-02-16 | **Security Fix (Credential Leakage Prevention)**: Backend now sanitizes execution logs, tool calls, and responses before database persistence. Uses `sanitize_execution_log()` and `sanitize_response()` from `src/backend/utils/credential_sanitizer.py`. Both `/chat` (lines 283-286) and `/task` (lines 468-470, 699-712) endpoints sanitize data before calling `db.update_execution_status()`. This is a defense-in-depth layer that catches any credentials that may have bypassed agent-side sanitization. |
 | 2026-02-15 | **Claude Max subscription support**: Documented that Claude Code now uses whatever authentication is available (OAuth session from `/login` or `ANTHROPIC_API_KEY`). The mandatory API key check was removed from `execute_claude_code()` and `execute_headless_task()`. This allows headless executions to use Claude Max subscription billing if user logged in via web terminal. |
 | 2026-02-12 | **Test fix**: `test_parallel_task_does_not_show_in_queue` now uses `async_mode: True` to return immediately instead of waiting for task completion (was timing out after 30s). |
+| 2026-05-12 | **Circuit-breaker failure classification narrowed (#474)**: `AgentClient._request()` now classifies exceptions via the shared `is_circuit_failure()` helper in `services/agent_client.py`. Only `CIRCUIT_FAILURE_EXCEPTIONS` (`httpx.ConnectError`, `httpx.ConnectTimeout`) increment the 3-failure threshold. `TRANSIENT_TRANSPORT_EXCEPTIONS` (`ReadTimeout`, `WriteTimeout`, `PoolTimeout`, `WriteError`, `ReadError`, `RemoteProtocolError`) still raise `AgentNotReachableError` (preserves the typed-error contract for `except AgentClientError` blocks) but no longer poison the circuit. Raw `OSError` subclasses (`BrokenPipeError`, `ConnectionResetError`) propagate uncaught — local resource bugs, not agent unhealth. `asyncio.CancelledError` is re-raised explicitly so it can't be shadowed by a broader catch. Same rule is mirrored in `services/monitoring_service.py:check_network_health()` so the `/health` probe and inline `/api/*` requests agree on what "unreachable" means. |
 | 2026-04-11 | **RELIABILITY-001**: `AgentClient` now includes per-agent circuit breaker (3 failures → 30s cooldown), tenacity retry on idempotent calls (health, session), and persistent connection pooling. New `AgentCircuitOpenError` exception (subclass of `AgentClientError`). Updated line numbers for response data classes and parsing logic. |
 | 2026-02-11 | **Scheduler Consolidation**: Updated Section 2 to reflect removal of embedded scheduler. Schedule execution now handled by dedicated scheduler (`src/scheduler/`). Updated Key Files Summary table. |
 | 2026-01-29 | **MCP Schedule Management (MCP-SCHED-001)**: Added `trigger_agent_schedule` MCP tool to Entry Points. Updated Related Flows to note that MCP schedule tools go through the queue. |

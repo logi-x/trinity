@@ -9,11 +9,13 @@ import httpx
 import json
 import logging
 import asyncio
+import uuid
 from datetime import datetime
 from typing import Optional
 
 from models import User, ChatMessageRequest, ModelChangeRequest, ParallelTaskRequest, ActivityType, ActivityState, TaskExecutionStatus, ExecutionSource
 from dependencies import get_current_user, get_authorized_agent, get_owned_agent
+from services.agent_call_limiter import BackendAgentCallBudgetExhausted
 from services.docker_service import get_agent_container
 from services.activity_service import activity_service
 from services.upload_service import process_file_uploads, decode_web_file, WEB_MAX_FILES, WEB_MAX_FILE_SIZE, WEB_MAX_IMAGE_SIZE, WEB_MAX_TOTAL_IMAGE_SIZE
@@ -23,11 +25,12 @@ from services.capacity_manager import (
     get_capacity_manager,
 )
 from services.task_execution_service import (
+    _compute_context_used,
     get_task_execution_service,
     agent_post_with_retry,
 )
 from database import db
-from utils.credential_sanitizer import sanitize_execution_log, sanitize_response
+from utils.credential_sanitizer import sanitize_dict, sanitize_execution_log, sanitize_response
 from services.platform_prompt_service import (
     ExecutionContext,
     compose_system_prompt,
@@ -310,6 +313,16 @@ async def chat_with_agent(
         if task_execution_id:
             payload["execution_id"] = task_execution_id
 
+        # Mark execution dispatched BEFORE calling agent so the cleanup-service
+        # no-session sweep doesn't falsely fail long-running executions
+        # (mirrors services/task_execution_service.py:401-410, fixes #686 —
+        # parallel codepath of #279).
+        if task_execution_id:
+            try:
+                db.mark_execution_dispatched(task_execution_id)
+            except Exception as e:
+                logger.warning(f"[Chat] Failed to mark execution dispatched: {e}")
+
         start_time = datetime.utcnow()
 
         # Use retry helper to handle agent server startup delays
@@ -398,6 +411,28 @@ async def chat_with_agent(
         # SECURITY: Use sanitized response and execution logs
         if task_execution_id:
             context_used = session_data.get("context_tokens", 0)
+            # Persist the real Claude session UUID instead of the 'dispatched'
+            # sentinel set by mark_execution_dispatched (#686 UC1 — closes
+            # observability gap; falls back to existing sentinel if absent).
+            # Defense-in-depth: agent-server emits session IDs as uuid4 strings
+            # (docker/base-image/agent_server/services/headless_executor.py:167).
+            # Reject malformed values so a buggy/compromised agent can't poison
+            # the claude_session_id column — on rejection leave the 'dispatched'
+            # sentinel (cleanup sweep stays correct, observability lost for row).
+            real_session_id = (
+                response_data.get("session_id")
+                or session_data.get("session_id")
+                or metadata.get("session_id")
+            )
+            if real_session_id is not None:
+                try:
+                    uuid.UUID(str(real_session_id))
+                except (ValueError, TypeError, AttributeError):
+                    logger.warning(
+                        f"[Chat] Discarding malformed claude_session_id from agent response "
+                        f"(execution_id={task_execution_id})"
+                    )
+                    real_session_id = None
             db.update_execution_status(
                 execution_id=task_execution_id,
                 status=TaskExecutionStatus.SUCCESS,
@@ -406,7 +441,8 @@ async def chat_with_agent(
                 context_max=session_data.get("context_window") or 200000,
                 cost=metadata.get("cost_usd"),
                 tool_calls=tool_calls_json,  # Simplified format for activity tracking
-                execution_log=execution_log_json  # Raw Claude Code format for UI
+                execution_log=execution_log_json,  # Raw Claude Code format for UI
+                claude_session_id=real_session_id,
             )
 
         execution_success = True
@@ -423,16 +459,52 @@ async def chat_with_agent(
         }
 
         return response_data
+    except BackendAgentCallBudgetExhausted as _budget_e:
+        # #904 RC-1: backend agent-call budget exhausted. Translate to a
+        # 503 without firing SUB-003 (no Claude work started; the
+        # subscription is unrelated to the rejection). Close out the
+        # in-flight chat activity + execution row in the FAILED state
+        # so the timeline reflects the rejection accurately.
+        budget_msg = str(_budget_e)
+        await activity_service.complete_activity(
+            activity_id=chat_activity_id,
+            status=ActivityState.FAILED,
+            error=budget_msg,
+        )
+        if task_execution_id:
+            existing = db.get_execution(task_execution_id)
+            if not existing or existing.status != TaskExecutionStatus.CANCELLED:
+                db.update_execution_status(
+                    execution_id=task_execution_id,
+                    status=TaskExecutionStatus.FAILED,
+                    error=budget_msg,
+                )
+        if collaboration_activity_id:
+            await activity_service.complete_activity(
+                activity_id=collaboration_activity_id,
+                status=ActivityState.FAILED,
+                error=budget_msg,
+            )
+        raise HTTPException(status_code=503, detail=budget_msg)
+
     except httpx.HTTPError as e:
         import logging
         # Extract detailed error message from agent response if available
         error_msg = f"HTTP error: {type(e).__name__}"
         agent_status_code = None
+        # #678: salvage partial metadata when the agent returned the
+        # structured dict body from _classify_empty_result.
+        partial_metadata: dict = {}
         if hasattr(e, 'response') and e.response is not None:
             agent_status_code = e.response.status_code
             try:
                 error_data = e.response.json()
-                if "detail" in error_data:
+                detail = error_data.get("detail")
+                if isinstance(detail, dict):
+                    error_msg = detail.get("message") or str(detail)
+                    if isinstance(detail.get("metadata"), dict):
+                        partial_metadata = sanitize_dict(detail["metadata"])
+                elif "detail" in error_data:
                     error_msg = error_data["detail"]
             except Exception:
                 # Try raw text if JSON parsing fails
@@ -448,12 +520,30 @@ async def chat_with_agent(
         )
 
         # Update task execution record on failure (#96: all chat types now have execution records)
+        # #678: salvage cost/context from partial_metadata when the agent
+        # captured them before the reader-thread race wedged its stream.
+        # Mirror the cancellation-race guard from task_execution_service.py:
+        # the SQL WHERE clause in update_execution_status already blocks a
+        # FAILED write over a CANCELLED row, but the explicit pre-check
+        # keeps the two callers consistent and avoids a wasted UPDATE.
         if task_execution_id:
-            db.update_execution_status(
-                execution_id=task_execution_id,
-                status=TaskExecutionStatus.FAILED,
-                error=error_msg
-            )
+            existing = db.get_execution(task_execution_id)
+            if not existing or existing.status != TaskExecutionStatus.CANCELLED:
+                salvage_cost = partial_metadata.get("cost_usd") if partial_metadata else None
+                salvage_context = _compute_context_used(partial_metadata) if partial_metadata else None
+                salvage_context_max = (
+                    (partial_metadata.get("context_window") or 200000)
+                    if partial_metadata
+                    else None
+                )
+                db.update_execution_status(
+                    execution_id=task_execution_id,
+                    status=TaskExecutionStatus.FAILED,
+                    error=error_msg,
+                    cost=salvage_cost,
+                    context_used=salvage_context,
+                    context_max=salvage_context_max,
+                )
 
         # Complete collaboration activity on failure (was missing - caused activities to stay in "started" state)
         if collaboration_activity_id:

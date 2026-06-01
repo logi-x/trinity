@@ -24,12 +24,49 @@ import pytest
 
 # Make the agent-server package importable so we can hit the real helper
 # rather than duplicating it in the test.
+#
+# `pyproject.toml:7` puts `tests` first on sys.path, and `tests/agent_server/`
+# exists as a test-helpers package. Without evicting the cached shadow first,
+# `import agent_server.routers.git` resolves to the helpers package (no
+# `routers/` submodule) and ImportError. Same pattern as conftest.py:65 for
+# the `utils` shadow.
+import importlib.util
+import types
+
 _BASE_IMAGE = Path(__file__).resolve().parent.parent.parent / "docker" / "base-image"
 _BASE_IMAGE_STR = str(_BASE_IMAGE)
 if _BASE_IMAGE_STR not in sys.path:
     sys.path.insert(0, _BASE_IMAGE_STR)
 
-# Import via absolute package path.
+# Pytest's rootdir machinery (`tests/unit/pytest.ini` makes `tests/` a search
+# root) can let `tests/agent_server/__init__.py` shadow the real package, so
+# `from agent_server.routers.git import ...` would otherwise raise
+# ModuleNotFoundError. The unit conftest's `_preload_real_agent_server` shim
+# has already swapped in a namespace package whose `__path__` points to
+# `docker/base-image/agent_server` — but only if some earlier test hadn't
+# already cached the wrong (shadow) one. Verify the cache reflects the real
+# path; if not, replace it with the namespace shim. Importantly we do NOT
+# `exec_module(__init__.py)` here — that would create a *second* agent_server
+# module object distinct from the one earlier-collected unit files (e.g.
+# `test_drain_bounded.py`) already imported attributes from. monkeypatch
+# would then patch the new module while our test fixtures call into the old
+# one and the patch never lands. (#728 regression observed during the
+# pollution audit.)
+_existing = sys.modules.get("agent_server")
+_real_path = str(_BASE_IMAGE / "agent_server")
+if _existing is None or not any(
+    _real_path in p for p in (getattr(_existing, "__path__", None) or [])
+):
+    for _mod in list(sys.modules):
+        if _mod == "agent_server" or _mod.startswith("agent_server."):
+            sys.modules.pop(_mod, None)
+    _stub = types.ModuleType("agent_server")
+    _stub.__path__ = [_real_path]  # type: ignore[attr-defined]
+    _stub.__package__ = "agent_server"
+    sys.modules["agent_server"] = _stub
+
+# Import via absolute package path. The submodules below will each execute
+# their own module body via the conftest-installed namespace package.
 from agent_server.routers.git import (  # noqa: E402
     _compute_ahead_behind,
     _get_pull_branch,
@@ -76,20 +113,20 @@ def repos(tmp_path):
 
 
 class TestComputeAheadBehind:
-    """_compute_ahead_behind returns (behind, ahead) against any ref."""
+    """_compute_ahead_behind(home_dir, branch) returns (ahead, behind) vs origin/<branch>."""
 
     def test_zero_when_in_sync(self, repos):
         local, _ = repos
-        behind, ahead = _compute_ahead_behind("main", local)
-        assert (behind, ahead) == (0, 0)
+        ahead, behind = _compute_ahead_behind(local, "main")
+        assert (ahead, behind) == (0, 0)
 
     def test_ahead_when_local_commits(self, repos):
         local, _ = repos
         (local / "new.txt").write_text("x")
         _run(["git", "add", "."], local)
         _run(["git", "commit", "-m", "local commit"], local)
-        behind, ahead = _compute_ahead_behind("main", local)
-        assert (behind, ahead) == (0, 1)
+        ahead, behind = _compute_ahead_behind(local, "main")
+        assert (ahead, behind) == (1, 0)
 
     def test_behind_when_remote_commits(self, repos):
         local, remote = repos
@@ -105,13 +142,13 @@ class TestComputeAheadBehind:
         _run(["git", "push", "origin", "main"], peer)
 
         _run(["git", "fetch", "origin"], local)
-        behind, ahead = _compute_ahead_behind("main", local)
-        assert (behind, ahead) == (1, 0)
+        ahead, behind = _compute_ahead_behind(local, "main")
+        assert (ahead, behind) == (0, 1)
 
     def test_missing_ref_returns_zero(self, repos):
         local, _ = repos
-        behind, ahead = _compute_ahead_behind("does-not-exist", local)
-        assert (behind, ahead) == (0, 0)
+        ahead, behind = _compute_ahead_behind(local, "does-not-exist")
+        assert (ahead, behind) == (0, 0)
 
 
 class TestDualAheadBehindPayload:

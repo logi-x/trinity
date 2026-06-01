@@ -9,7 +9,7 @@
             @click="showSessionDropdown = !showSessionDropdown"
             class="flex items-center space-x-2 px-3 py-1.5 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
           >
-            <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4 text-action-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <span class="max-w-32 truncate">{{ currentSessionLabel }}</span>
@@ -36,7 +36,7 @@
                 :key="session.id"
                 @click="selectSession(session)"
                 class="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                :class="{ 'bg-indigo-50 dark:bg-indigo-900/30': currentSessionId === session.id }"
+                :class="{ 'bg-action-primary-50 dark:bg-action-primary-900/30': currentSessionId === session.id }"
               >
                 <div class="flex items-center justify-between">
                   <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
@@ -51,7 +51,7 @@
                   <span>{{ formatContextPercent(session) }}</span>
                   <span v-if="session.cached_claude_session_id" class="text-emerald-500" title="Has working memory">●</span>
                   <span v-else class="text-gray-300 dark:text-gray-600" title="Cold (memory cleared)">●</span>
-                  <span v-if="session.consecutive_resume_failures > 0" class="text-amber-500">
+                  <span v-if="session.consecutive_resume_failures > 0" class="text-state-autonomous-500">
                     {{ session.consecutive_resume_failures }} resume failure(s)
                   </span>
                 </p>
@@ -67,24 +67,24 @@
           <ModelSelector v-model="selectedModel" compact placeholder="Default model" />
         </div>
 
-        <!-- Reset memory button (Phase 3.4) — only when an active session exists -->
+        <!-- Clear working memory button (Phase 3.4, #685) — only when an active session exists -->
         <div v-if="currentSessionId" class="flex flex-col items-end">
           <button
             @click="confirmReset"
             :disabled="loading"
-            class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded-lg transition-colors"
-            title="Clear working memory (keeps message history)"
+            class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-state-autonomous-600 dark:text-state-autonomous-400 hover:text-state-autonomous-700 dark:hover:text-state-autonomous-300 hover:bg-state-autonomous-50 dark:hover:bg-state-autonomous-900/30 rounded-lg transition-colors"
+            title="Clear Claude's working memory for this session — use if it's stuck or repeating itself. Your chat history is kept; this is not the same as + New Session."
           >
             <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            Reset memory
+            Clear working memory
           </button>
           <p
             v-if="showCompactHint"
             class="text-xs italic text-gray-500 dark:text-gray-400 mt-1 max-w-xs text-right"
           >
-            Compacted {{ currentSession.compact_count }} times — consider starting fresh for sharper responses.
+            Compacted {{ currentSession.compact_count }} times — consider a + New Session for sharper responses.
           </p>
         </div>
 
@@ -92,7 +92,7 @@
         <button
           @click="startNewSession"
           :disabled="loading || creatingSession"
-          class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
+          class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-action-primary-600 dark:text-action-primary-400 hover:text-action-primary-700 dark:hover:text-action-primary-300 hover:bg-action-primary-50 dark:hover:bg-action-primary-900/30 rounded-lg transition-colors"
         >
           <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
@@ -105,8 +105,8 @@
     <!-- Agent not running message -->
     <div v-if="agentStatus !== 'running'" class="flex-1 flex items-center justify-center">
       <div class="text-center p-8">
-        <div class="w-16 h-16 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-          <svg class="w-8 h-8 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div class="w-16 h-16 bg-status-warning-100 dark:bg-status-warning-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+          <svg class="w-8 h-8 text-status-warning-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
         </div>
@@ -122,19 +122,19 @@
       <!-- Fallback notice (E2/E3): the resume failed and we recovered -->
       <div
         v-if="fallbackNotice"
-        class="mx-6 mt-3 px-4 py-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg flex items-center justify-between"
+        class="mx-6 mt-3 px-4 py-3 bg-state-autonomous-50 dark:bg-state-autonomous-900/30 border border-state-autonomous-200 dark:border-state-autonomous-800 rounded-lg flex items-center justify-between"
       >
         <div class="flex items-center space-x-2">
-          <svg class="w-5 h-5 text-amber-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5 text-state-autonomous-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" />
           </svg>
-          <span class="text-sm text-amber-700 dark:text-amber-300">
+          <span class="text-sm text-state-autonomous-700 dark:text-state-autonomous-300">
             This session’s working memory expired. Starting fresh — past messages are still visible.
           </span>
         </div>
         <button
-          @click="fallbackNotice = false"
-          class="text-amber-500 hover:text-amber-700 dark:hover:text-amber-300"
+          @click="dismissFallbackNotice"
+          class="text-state-autonomous-500 hover:text-state-autonomous-700 dark:hover:text-state-autonomous-300"
           title="Dismiss"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -153,8 +153,8 @@
       >
         <template #empty>
           <div class="text-center py-12">
-            <div class="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg class="w-8 h-8 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div class="w-16 h-16 bg-action-primary-100 dark:bg-action-primary-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg class="w-8 h-8 text-action-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
             </div>
@@ -170,8 +170,8 @@
       </ChatMessages>
 
       <!-- Error message -->
-      <div v-if="error" class="mx-6 mb-2 p-3 rounded-lg bg-red-100 dark:bg-red-900/30 border border-red-200 dark:border-red-800">
-        <p class="text-sm text-red-600 dark:text-red-400">{{ error }}</p>
+      <div v-if="error" class="mx-6 mb-2 p-3 rounded-lg bg-status-danger-100 dark:bg-status-danger-900/30 border border-status-danger-200 dark:border-status-danger-800">
+        <p class="text-sm text-status-danger-600 dark:text-status-danger-400">{{ error }}</p>
       </div>
 
       <!-- Input area -->
@@ -197,11 +197,15 @@
       @click.self="showResetModal = false"
     >
       <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Reset session memory?</h3>
-        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-          The agent will forget the working state of this session — but the message history
-          stays visible. Useful when you want to start a clean line of thought. Your next
-          message becomes a cold turn under a new Claude session.
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Clear Claude's working memory?</h3>
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">
+          Claude forgets the working state of this session, but your message history
+          stays visible. Use this if it's stuck or going in circles — your next message
+          starts a fresh line of thought in the same session.
+        </p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Different from <span class="font-medium">+ New Session</span>, which starts a
+          brand-new conversation. This keeps the current session and its history.
         </p>
         <div class="flex justify-end space-x-2">
           <button
@@ -212,9 +216,9 @@
           </button>
           <button
             @click="performReset"
-            class="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg"
+            class="px-4 py-2 text-sm font-medium text-white bg-state-autonomous-600 hover:bg-state-autonomous-700 rounded-lg"
           >
-            Reset memory
+            Clear working memory
           </button>
         </div>
       </div>
@@ -223,7 +227,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
 import { ChatMessages, ChatInput } from './chat'
 import ModelSelector from './ModelSelector.vue'
 import { useSessionsStore } from '../stores/sessions'
@@ -241,22 +245,28 @@ const props = defineProps({
 
 const sessionsStore = useSessionsStore()
 
-// Local UI state
+// -- Local UI state ----------------------------------------------------------
+// AgentDetail is wrapped in <KeepAlive>, so this SessionPanel instance is
+// reused across all `/agents/*` routes. Local refs survive deactivation
+// and would otherwise bleed across agents. Turn-specific state (loading,
+// error, fallback notice, in-flight tracking) lives in the Pinia store
+// keyed by sessionId. The local refs below are intentionally UI-only:
+// either ephemera that's safe to reset on agent change, or user prefs
+// (selectedModel) that should persist.
 const message = ref('')
-const loading = ref(false)
+const localLoading = ref(false)        // non-turn loading: select/create/reset
 const loadingText = ref('Thinking...')
-const error = ref(null)
+const localError = ref(null)           // non-turn errors: load/create/reset
 const sessionsLoading = ref(false)
 const showSessionDropdown = ref(false)
 const showResetModal = ref(false)
-const fallbackNotice = ref(false)
 const creatingSession = ref(false)
 const dropdownRef = ref(null)
 const messagesRef = ref(null)
 const chatInputRef = ref(null)
 const selectedModel = ref(localStorage.getItem('trinity_session_model') || '')
 
-// Derive from store
+// -- Derived from store -----------------------------------------------------
 const sessions = computed(() => sessionsStore.sessionsFor(props.agentName))
 const currentSessionId = computed(() => sessionsStore.activeSessionId(props.agentName))
 const messages = computed(() => {
@@ -268,6 +278,28 @@ const messages = computed(() => {
     source: 'text',
   }))
 })
+
+// -- Turn state from store, scoped by current sessionId ---------------------
+// These computed wrappers read store state keyed by `currentSessionId`.
+// Switching agents/sessions automatically follows the active session id,
+// so the template never sees stale state from another session.
+const turnInFlight = computed(() =>
+  currentSessionId.value ? sessionsStore.isInFlight(currentSessionId.value) : false,
+)
+const turnError = computed(() =>
+  currentSessionId.value ? sessionsStore.errorForSession(currentSessionId.value) : null,
+)
+const fallbackNotice = computed(() =>
+  currentSessionId.value ? sessionsStore.fallbackNoticeForSession(currentSessionId.value) : false,
+)
+
+// Unified `loading` for the template: turn in flight OR any UI loading.
+const loading = computed(
+  () => turnInFlight.value || localLoading.value || creatingSession.value || sessionsLoading.value,
+)
+// Unified `error` for the template: turn error takes precedence (it's
+// what the user just acted on); fall back to non-turn errors.
+const error = computed(() => turnError.value || localError.value)
 
 const currentSessionLabel = computed(() => {
   if (!currentSessionId.value) return 'No session'
@@ -334,7 +366,7 @@ async function loadSessions(autoSelect = true) {
       await selectSession(sessions.value[0], false)
     }
   } catch (e) {
-    error.value = 'Failed to load sessions'
+    localError.value = 'Failed to load sessions'
   } finally {
     sessionsLoading.value = false
   }
@@ -344,15 +376,14 @@ async function selectSession(session, closeDropdown = true) {
   if (closeDropdown) showSessionDropdown.value = false
   if (currentSessionId.value === session.id) return
   sessionsStore.selectSession(props.agentName, session.id)
-  loading.value = true
-  error.value = null
-  fallbackNotice.value = false
+  localLoading.value = true
+  localError.value = null
   try {
     await sessionsStore.loadSession(props.agentName, session.id)
   } catch {
-    error.value = 'Failed to load session messages'
+    localError.value = 'Failed to load session messages'
   } finally {
-    loading.value = false
+    localLoading.value = false
     focusInput()
   }
 }
@@ -361,16 +392,23 @@ async function startNewSession() {
   if (creatingSession.value) return
   creatingSession.value = true
   showSessionDropdown.value = false
-  error.value = null
-  fallbackNotice.value = false
+  localError.value = null
   try {
     await sessionsStore.createSession(props.agentName)
     focusInput()
   } catch (e) {
-    error.value = e.response?.data?.detail || 'Failed to create session'
+    localError.value = e.response?.data?.detail || 'Failed to create session'
   } finally {
     creatingSession.value = false
   }
+}
+
+function dismissFallbackNotice() {
+  const sid = currentSessionId.value
+  if (!sid) return
+  // Store owns fallback notice state per session; clear just that flag
+  // without touching in-flight/error state.
+  sessionsStore.fallbackNoticeBySession[sid] = false
 }
 
 // ----- reset / delete --------------------------------------------------------
@@ -386,9 +424,11 @@ async function performReset() {
   if (!sid) return
   try {
     await sessionsStore.resetSession(props.agentName, sid)
-    fallbackNotice.value = false
+    // Clear any stale turn state (error, fallback notice, polling) on
+    // the now-reset session. Store-side cleanup is idempotent.
+    sessionsStore.clearSessionTurnState(sid)
   } catch (e) {
-    error.value = e.response?.data?.detail || 'Failed to reset memory'
+    localError.value = e.response?.data?.detail || 'Failed to clear working memory'
   }
 }
 
@@ -396,45 +436,34 @@ async function performReset() {
 
 async function onSubmit(text, files = []) {
   if ((!text && (!files || files.length === 0)) || loading.value || props.agentStatus !== 'running') return
-  error.value = null
 
   // Lazy session creation — first turn from the empty state creates a row.
   if (!currentSessionId.value) {
     try {
       await sessionsStore.createSession(props.agentName)
     } catch (e) {
-      error.value = e.response?.data?.detail || 'Failed to create session'
+      localError.value = e.response?.data?.detail || 'Failed to create session'
       return
     }
   }
 
   message.value = ''
-  loading.value = true
   loadingText.value = 'Thinking...'
-  fallbackNotice.value = false
   const sid = currentSessionId.value
 
   try {
-    const result = await sessionsStore.sendMessage(props.agentName, sid, text, {
+    // sendMessage manages inFlight + error + fallbackNotice on the store,
+    // keyed by sessionId. The template's computed `loading`/`error`/
+    // `fallbackNotice` follow automatically.
+    await sessionsStore.sendMessage(props.agentName, sid, text, {
       model: selectedModel.value || undefined,
       files: files && files.length > 0 ? files : undefined,
     })
-    if (result?.fallback_fired) {
-      fallbackNotice.value = true
-    }
     // Refresh the session list so the dropdown reflects new turn count + last_message_at.
     await sessionsStore.listSessions(props.agentName)
-  } catch (e) {
-    const detail = e.response?.data?.detail
-    if (typeof detail === 'string') {
-      error.value = detail
-    } else if (detail?.error) {
-      error.value = detail.error
-    } else {
-      error.value = 'Failed to send message'
-    }
+  } catch {
+    // Store has already populated errorBySession[sid] with a friendly message.
   } finally {
-    loading.value = false
     loadingText.value = 'Thinking...'
   }
 }
@@ -458,12 +487,62 @@ watch(selectedModel, (val) => {
 
 watch(
   () => [props.agentName, props.agentStatus],
-  ([, status]) => {
+  ([newName, status], oldVals) => {
     if (status === 'running') {
       loadSessions()
     }
+    const oldName = Array.isArray(oldVals) ? oldVals[0] : null
+    if (newName !== oldName) {
+      // SessionPanel instance is shared across agents via <KeepAlive>.
+      // Reset local UI ephemera so it doesn't bleed across agents (#759).
+      // Per-session turn state lives in the Pinia store keyed by sessionId
+      // and naturally scopes — but local refs survive deactivation.
+      message.value = ''
+      showSessionDropdown.value = false
+      showResetModal.value = false
+      localError.value = null
+      localLoading.value = false
+      creatingSession.value = false
+      sessionsLoading.value = false
+    }
   },
 )
+
+// ----- KeepAlive lifecycle (Issue #759) -------------------------------------
+
+// onActivated fires when SessionPanel is reactivated after a KeepAlive
+// deactivation — i.e., the user navigated to another route and came back.
+// If a turn is still running on the backend (visible via `turn_in_progress`
+// on the latest loadSession response), start polling so the UI eventually
+// catches up. Backend persists user + assistant rows itself; we just need
+// to re-fetch them.
+onActivated(async () => {
+  // Capture props.agentName and the active session id BEFORE the await.
+  // AgentDetail's route watch fires loadAgent() async on agent-name route
+  // changes; `agent.value` (and therefore SessionPanel's `props.agentName`)
+  // can update mid-await. Without capture, the post-await read would pair
+  // the previous agent's session id with the new agent's name and 404 the
+  // polling closure indefinitely (#759 follow-up).
+  const agentName = props.agentName
+  const sid = currentSessionId.value
+  if (!sid || props.agentStatus !== 'running') return
+  try {
+    const data = await sessionsStore.loadSession(agentName, sid)
+    if (data?.session?.turn_in_progress) {
+      sessionsStore.startPolling(agentName, sid)
+    }
+  } catch {
+    // Re-sync failure is non-fatal — the next user action will retry.
+  }
+})
+
+// Stop polling while the panel isn't visible. We're using ref-counted
+// start/stop so this won't kill a concurrent watcher (today there's only
+// ever one instance — but the contract is honoured).
+onDeactivated(() => {
+  const sid = currentSessionId.value
+  if (sid) sessionsStore.stopPolling(sid)
+})
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
@@ -472,5 +551,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  // Best-effort cleanup if the panel ever fully unmounts (KeepAlive cache
+  // eviction or a future refactor). Stops the timer for the current sid.
+  const sid = currentSessionId.value
+  if (sid) sessionsStore.stopPolling(sid)
 })
 </script>

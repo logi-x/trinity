@@ -16,7 +16,8 @@ from pydantic import BaseModel
 from typing import Optional, Dict, List
 import logging
 
-from models import ActivityState, ActivityType, ShareFileRequest, ShareFileResponse
+from database import db
+from models import ActivityState, ActivityType, ShareFileRequest, ShareFileResponse, TaskExecutionStatus
 from services.activity_service import activity_service
 from services.task_execution_service import get_task_execution_service
 from services.platform_audit_service import platform_audit_service, AuditEventType
@@ -263,6 +264,17 @@ async def execute_task_internal(request: InternalTaskExecutionRequest):
     task and returns immediately with {"status": "accepted"}. The scheduler
     then polls the DB for completion instead of holding the HTTP connection.
     """
+    # #748: warming-up gate. Until startup orphan-recovery finishes, refuse new
+    # task starts so we don't ZADD a capacity slot for an execution row that
+    # recovery is about to flip to FAILED (which would leak the slot until
+    # TTL). The scheduler treats 503 as transient and retries.
+    from services.cleanup_service import is_startup_recovery_complete
+    if not is_startup_recovery_complete():
+        raise HTTPException(
+            status_code=503,
+            detail="Backend warming up — startup execution recovery still in progress. Retry.",
+        )
+
     task_service = get_task_execution_service()
 
     # Audit schedule-triggered execution (source=scheduler, actor=system)
@@ -332,9 +344,6 @@ async def _execute_task_internal_background(task_service, request: InternalTaskE
     tracking, DB updates, and cleanup. This wrapper logs outcomes and ensures
     execution status is updated on any uncaught exception (fixes issue #90).
     """
-    from database import db
-    from models import TaskExecutionStatus
-
     try:
         result = await task_service.execute_task(
             agent_name=request.agent_name,
@@ -351,6 +360,28 @@ async def _execute_task_internal_background(task_service, request: InternalTaskE
             f"Async task completed for {request.agent_name}: "
             f"status={result.status}, execution_id={result.execution_id}"
         )
+    except asyncio.CancelledError:
+        # Python 3.11+: CancelledError is BaseException, bypasses except Exception.
+        # On backend shutdown, in-flight background tasks are cancelled; close the
+        # record synchronously so cleanup_service doesn't inflate duration (#767).
+        if request.execution_id:
+            try:
+                existing = db.get_execution(request.execution_id)
+                if existing and existing.status not in (
+                    TaskExecutionStatus.SUCCESS,
+                    TaskExecutionStatus.FAILED,
+                    TaskExecutionStatus.CANCELLED,
+                ):
+                    db.update_execution_status(
+                        execution_id=request.execution_id,
+                        status=TaskExecutionStatus.FAILED,
+                        error="Execution cancelled (backend shutdown)",
+                    )
+                    logger.info(f"Updated execution {request.execution_id} to FAILED on cancel")
+            except Exception as db_err:
+                logger.error(f"Failed to update execution status on cancel: {db_err}")
+        raise
+
     except Exception as e:
         # If an exception escapes TaskExecutionService, ensure execution is marked failed
         # to prevent stuck 'running' status (fixes issue #90)

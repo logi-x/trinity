@@ -133,6 +133,7 @@ from db.telegram_channels import TelegramChannelOperations
 from db.whatsapp_channels import WhatsAppChannelOperations
 from db.access_requests import AccessRequestOperations
 from db.audit import PlatformAuditOperations
+from db.canary import CanaryOperations
 from db.sync_state import SyncStateOperations
 
 
@@ -289,6 +290,7 @@ class DatabaseManager:
         self._whatsapp_channel_ops = WhatsAppChannelOperations()
         self._access_request_ops = AccessRequestOperations()
         self._audit_ops = PlatformAuditOperations()
+        self._canary_ops = CanaryOperations()
         self._sync_state_ops = SyncStateOperations()  # #389 sync health
 
     # =========================================================================
@@ -343,6 +345,21 @@ class DatabaseManager:
 
     def delete_agent_ownership(self, agent_name: str):
         return self._agent_ops.delete_agent_ownership(agent_name)
+
+    def purge_agent_ownership(self, agent_name: str):
+        return self._agent_ops.purge_agent_ownership(agent_name)
+
+    def find_soft_deleted_agents_past_retention(self, retention_days: int, limit: int = 5000):
+        return self._agent_ops.find_soft_deleted_agents_past_retention(retention_days, limit)
+
+    def is_agent_name_reserved(self, agent_name: str):
+        return self._agent_ops.is_agent_name_reserved(agent_name)
+
+    def recover_agent_ownership(self, agent_name: str):
+        return self._agent_ops.recover_agent_ownership(agent_name)
+
+    def list_soft_deleted_agents(self, limit: int = 200):
+        return self._agent_ops.list_soft_deleted_agents(limit)
 
     def rename_agent(self, old_name: str, new_name: str):
         return self._agent_ops.rename_agent(old_name, new_name)
@@ -683,6 +700,11 @@ class DatabaseManager:
     def list_agent_schedules(self, agent_name: str):
         return self._schedule_ops.list_agent_schedules(agent_name)
 
+    def find_active_schedules_exceeding_timeout(self, agent_name: str, ceiling_seconds: int):
+        return self._schedule_ops.find_active_schedules_exceeding_timeout(
+            agent_name, ceiling_seconds
+        )
+
     def list_all_enabled_schedules(self):
         return self._schedule_ops.list_all_enabled_schedules()
 
@@ -698,6 +720,31 @@ class DatabaseManager:
 
     def delete_schedule(self, schedule_id: str, username: str):
         return self._schedule_ops.delete_schedule(schedule_id, username)
+
+    def purge_schedule(self, schedule_id: str):
+        return self._schedule_ops.purge_schedule(schedule_id)
+
+    def find_soft_deleted_schedules_past_retention(self, retention_days: int, limit: int = 5000):
+        return self._schedule_ops.find_soft_deleted_schedules_past_retention(retention_days, limit)
+
+    def recover_schedule(self, schedule_id: str):
+        return self._schedule_ops.recover_schedule(schedule_id)
+
+    def list_soft_deleted_schedules(self, agent_name=None, limit: int = 200):
+        return self._schedule_ops.list_soft_deleted_schedules(agent_name, limit)
+
+    # Webhook token management (WEBHOOK-001, #291)
+    def generate_webhook_token(self, schedule_id: str):
+        return self._schedule_ops.generate_webhook_token(schedule_id)
+
+    def get_schedule_by_webhook_token(self, token: str):
+        return self._schedule_ops.get_schedule_by_webhook_token(token)
+
+    def revoke_webhook_token(self, schedule_id: str):
+        return self._schedule_ops.revoke_webhook_token(schedule_id)
+
+    def get_webhook_status(self, schedule_id: str):
+        return self._schedule_ops.get_webhook_status(schedule_id)
 
     def set_schedule_enabled(self, schedule_id: str, enabled: bool):
         return self._schedule_ops.set_schedule_enabled(schedule_id, enabled)
@@ -764,10 +811,10 @@ class DatabaseManager:
 
     def update_execution_status(self, execution_id: str, status: str, response: str = None, error: str = None,
                                 context_used: int = None, context_max: int = None, cost: float = None, tool_calls: str = None, execution_log: str = None,
-                                claude_session_id: str = None, compact_metadata: str = None):
+                                claude_session_id: str = None, compact_metadata: str = None, retry_count: int = None):
         return self._schedule_ops.update_execution_status(execution_id, status, response, error,
                                                           context_used, context_max, cost, tool_calls, execution_log, claude_session_id,
-                                                          compact_metadata)
+                                                          compact_metadata, retry_count)
 
     def mark_execution_dispatched(self, execution_id: str) -> bool:
         return self._schedule_ops.mark_execution_dispatched(execution_id)
@@ -837,6 +884,9 @@ class DatabaseManager:
 
     def get_git_auto_sync_enabled(self, agent_name: str):
         return self._schedule_ops.get_git_auto_sync_enabled(agent_name)
+
+    def get_all_git_auto_sync_enabled(self, agent_names=None):
+        return self._schedule_ops.get_all_git_auto_sync_enabled(agent_names)
 
     def get_freeze_schedules_if_sync_failing(self, agent_name: str):
         return self._schedule_ops.get_freeze_schedules_if_sync_failing(agent_name)
@@ -1004,6 +1054,14 @@ class DatabaseManager:
     def finalize_orphaned_skipped_executions(self):
         """Finalize skipped executions missing completed_at (Issue #106)."""
         return self._schedule_ops.finalize_orphaned_skipped_executions()
+
+    def prune_execution_logs(self, retention_days: int, chunk_size: int = 500) -> int:
+        """Null execution_log on terminal executions older than retention_days (#772)."""
+        return self._schedule_ops.prune_execution_logs(retention_days, chunk_size)
+
+    def prune_execution_rows(self, retention_days: int, chunk_size: int = 500) -> int:
+        """Delete terminal schedule_executions rows older than retention_days (#772)."""
+        return self._schedule_ops.prune_execution_rows(retention_days, chunk_size)
 
     def get_running_executions_with_agent_info(self):
         """Get all running executions with schedule timeout info (Issue #129)."""
@@ -1251,15 +1309,26 @@ class DatabaseManager:
     def delete_public_link_sessions(self, link_id: str):
         return self._public_chat_ops.delete_link_sessions(link_id)
 
-    # Public User Memory (MEM-001)
+    # Public User Memory (MEM-001 + #895 split storage)
     def get_or_create_public_user_memory(self, agent_name: str, user_email: str) -> dict:
         return self._public_link_ops.get_or_create_user_memory(agent_name, user_email)
 
     def increment_public_user_memory_count(self, agent_name: str, user_email: str) -> int:
         return self._public_link_ops.increment_message_count(agent_name, user_email)
 
-    def update_public_user_memory(self, agent_name: str, user_email: str, memory_text: str) -> bool:
-        return self._public_link_ops.update_user_memory(agent_name, user_email, memory_text)
+    def update_public_user_memory_agent_notes(
+        self, agent_name: str, user_email: str, agent_notes: str
+    ) -> bool:
+        return self._public_link_ops.update_user_memory_agent_notes(
+            agent_name, user_email, agent_notes
+        )
+
+    def update_public_user_memory_conversation_summary(
+        self, agent_name: str, user_email: str, conversation_summary: str
+    ) -> bool:
+        return self._public_link_ops.update_user_memory_conversation_summary(
+            agent_name, user_email, conversation_summary
+        )
 
     # =========================================================================
     # Agent Tags (delegated to db/tags.py) - ORG-001
@@ -1446,8 +1515,8 @@ class DatabaseManager:
     def calculate_avg_latency(self, agent_name: str, hours: int = 24):
         return self._monitoring_ops.calculate_avg_latency(agent_name, hours)
 
-    def cleanup_old_health_records(self, days: int = 7):
-        return self._monitoring_ops.cleanup_old_records(days)
+    def cleanup_old_health_records(self, days: int = 7, chunk_size: int = 1000):
+        return self._monitoring_ops.cleanup_old_records(days, chunk_size)
 
     def get_alert_cooldown(self, agent_name: str, condition: str):
         return self._monitoring_ops.get_cooldown(agent_name, condition)
@@ -1897,9 +1966,90 @@ class DatabaseManager:
         """Aggregate counts by event_type and actor_type for the dashboard."""
         return self._audit_ops.get_audit_stats(start_time=start_time, end_time=end_time)
 
+    def get_audit_heatmap(
+        self,
+        start_time: str = None,
+        end_time: str = None,
+        event_type: str = None,
+        actor_type: str = None,
+    ):
+        """Bucket audit rows into a 7×24 dow×hour heatmap grid (#941 v3)."""
+        return self._audit_ops.get_audit_heatmap(
+            start_time=start_time,
+            end_time=end_time,
+            event_type=event_type,
+            actor_type=actor_type,
+        )
+
+    def get_audit_calendar(
+        self,
+        start_time: str = None,
+        end_time: str = None,
+        event_type: str = None,
+        actor_type: str = None,
+    ):
+        """Per-day audit counts for the GitHub-style calendar (#941 v3.1)."""
+        return self._audit_ops.get_audit_calendar(
+            start_time=start_time,
+            end_time=end_time,
+            event_type=event_type,
+            actor_type=actor_type,
+        )
+
+    def get_distinct_event_types(self):
+        """Distinct event_type values across audit_log (sorted)."""
+        return self._audit_ops.get_distinct_event_types()
+
+    def get_distinct_actor_types(self):
+        """Distinct actor_type values across audit_log (sorted)."""
+        return self._audit_ops.get_distinct_actor_types()
+
     def prune_audit_log(self, retention_days: int) -> int:
         """Delete audit_log entries older than ``retention_days``. Returns count removed."""
         return self._audit_ops.prune_audit_log(retention_days)
+
+    # =========================================================================
+    # Canary Invariant Violations (CANARY-001 / Issue #411 — Phase 1)
+    # =========================================================================
+
+    def insert_canary_violation(
+        self,
+        invariant_id: str,
+        tier: str,
+        severity: str,
+        snapshot_time: str,
+        observed_state: dict,
+        signal_query: str = None,
+    ) -> int:
+        """Insert a violation row from the canary harness; returns row id."""
+        return self._canary_ops.insert_violation(
+            invariant_id=invariant_id,
+            tier=tier,
+            severity=severity,
+            snapshot_time=snapshot_time,
+            observed_state=observed_state,
+            signal_query=signal_query,
+        )
+
+    def list_canary_violations(self, **filters):
+        """Query violations with optional filters (newest first). See CanaryOperations."""
+        return self._canary_ops.list_violations(**filters)
+
+    def count_canary_violations(self, **filters):
+        """Count violations matching filters (independent of limit/offset)."""
+        return self._canary_ops.count_violations(**filters)
+
+    def get_canary_violation(self, violation_id: int):
+        """Fetch a single violation by id."""
+        return self._canary_ops.get_violation(violation_id)
+
+    def get_latest_canary_violation_per_invariant(self):
+        """Latest violation per invariant_id; used for green→red transition detection."""
+        return self._canary_ops.get_latest_per_invariant()
+
+    def get_canary_stats(self, start_time: str = None, end_time: str = None):
+        """Aggregate canary violation counts by invariant_id and severity."""
+        return self._canary_ops.stats_by_invariant(start_time=start_time, end_time=end_time)
 
 
 # Global database manager instance

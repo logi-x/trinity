@@ -28,7 +28,7 @@ class ResourcesMixin:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT memory_limit, cpu_limit
-                FROM agent_ownership WHERE agent_name = ?
+                FROM agent_ownership WHERE agent_name = ? AND deleted_at IS NULL
             """, (agent_name,))
             row = cursor.fetchone()
             if row:
@@ -82,7 +82,7 @@ class ResourcesMixin:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT COALESCE(max_parallel_tasks, 3) as max_parallel_tasks
-                FROM agent_ownership WHERE agent_name = ?
+                FROM agent_ownership WHERE agent_name = ? AND deleted_at IS NULL
             """, (agent_name,))
             row = cursor.fetchone()
             if row:
@@ -125,6 +125,7 @@ class ResourcesMixin:
             cursor.execute("""
                 SELECT agent_name, COALESCE(max_parallel_tasks, 3) as max_parallel_tasks
                 FROM agent_ownership
+                WHERE deleted_at IS NULL
             """)
             return {row["agent_name"]: row["max_parallel_tasks"] for row in cursor.fetchall()}
 
@@ -134,24 +135,24 @@ class ResourcesMixin:
 
     def get_execution_timeout(self, agent_name: str) -> int:
         """
-        Get execution_timeout_seconds for an agent (default: 900 = 15 minutes).
+        Get execution_timeout_seconds for an agent (default: 3600 = 60 minutes).
 
         Args:
             agent_name: Name of the agent
 
         Returns:
-            Timeout in seconds (default 900)
+            Timeout in seconds (default 3600)
         """
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT COALESCE(execution_timeout_seconds, 900) as execution_timeout_seconds
-                FROM agent_ownership WHERE agent_name = ?
+                SELECT COALESCE(execution_timeout_seconds, 3600) as execution_timeout_seconds
+                FROM agent_ownership WHERE agent_name = ? AND deleted_at IS NULL
             """, (agent_name,))
             row = cursor.fetchone()
             if row:
                 return row["execution_timeout_seconds"]
-            return 900  # Default 15 minutes
+            return 3600  # Default 60 minutes (#665)
 
     def get_all_execution_timeouts(self) -> Dict[str, int]:
         """
@@ -163,8 +164,9 @@ class ResourcesMixin:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT agent_name, COALESCE(execution_timeout_seconds, 900) as timeout
+                SELECT agent_name, COALESCE(execution_timeout_seconds, 3600) as timeout
                 FROM agent_ownership
+                WHERE deleted_at IS NULL
             """)
             return {row["agent_name"]: row["timeout"] for row in cursor.fetchall()}
 
@@ -208,7 +210,7 @@ class ResourcesMixin:
             cursor.execute(
                 """
                 SELECT COALESCE(max_backlog_depth, 50) as max_backlog_depth
-                FROM agent_ownership WHERE agent_name = ?
+                FROM agent_ownership WHERE agent_name = ? AND deleted_at IS NULL
                 """,
                 (agent_name,),
             )

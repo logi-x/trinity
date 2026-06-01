@@ -66,12 +66,12 @@ from routers.ops import router as ops_router
 from routers.public_links import router as public_links_router, set_websocket_manager as set_public_links_ws_manager
 from routers.public import router as public_router
 from routers.files import router as files_router  # FILES-001 — outbound file downloads
-from routers.site import router as site_router  # SITE-001 — agent website proxy
 from routers.setup import router as setup_router, get_setup_token as get_setup_setup_token
 from routers.telemetry import router as telemetry_router
 from routers.logs import router as logs_router
 from routers.agent_dashboard import router as agent_dashboard_router
 from routers.audit_log import router as audit_log_router  # SEC-001 / Issue #20
+from routers.canary import router as canary_router  # CANARY-001 / Issue #411
 from routers.skills import router as skills_router
 from routers.internal import router as internal_router
 from routers.tags import router as tags_router
@@ -91,7 +91,10 @@ from routers.voice import router as voice_router
 from routers.event_subscriptions import router as event_subscriptions_router, set_websocket_manager as set_event_subs_ws_manager, set_filtered_websocket_manager as set_event_subs_filtered_ws_manager
 from routers.users import router as users_router
 from routers.debug import router as debug_router  # #306 soak instrumentation
+from routers.a2a import router as a2a_router  # #737 A2A Agent Cards
+from routers.admin_recovery import router as admin_recovery_router  # #834 Phase 1c
 from routers.messages import router as messages_router  # Proactive Messaging (#321)
+from routers.public_memory import router as public_memory_router  # MEM-001 write path (#888)
 from routers.webhooks import router as webhooks_router  # Webhook triggers (WEBHOOK-001, #291)
 from routers.ws_tickets import router as ws_tickets_router  # /ws ticket auth (#550)
 
@@ -106,6 +109,7 @@ from services.log_archive_service import log_archive_service
 
 # Import audit retention service (#552)
 from services.audit_retention_service import audit_retention_service
+from services.db_vacuum_service import db_vacuum_service
 
 # Import operator queue sync service
 from services.operator_queue_service import operator_queue_service, set_websocket_manager as set_opqueue_sync_ws_manager
@@ -113,6 +117,7 @@ from services.sync_health_service import sync_health_service
 
 # Import cleanup service
 from services.cleanup_service import cleanup_service, set_cleanup_ws_manager
+from services.canary_service import canary_service  # CANARY-001 / Issue #411
 
 
 from services.platform_audit_service import platform_audit_service, AuditEventType
@@ -379,6 +384,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Error starting audit retention service: {e}")
 
+    # Initialize DB VACUUM service (#772)
+    try:
+        db_vacuum_service.start()
+        print("DB vacuum service started")
+    except Exception as e:
+        print(f"Error starting DB vacuum service: {e}")
+
     # PERF-269: Stagger background services to reduce SQLite write contention
     # Start operator queue sync service (OPS-001) — polls every 5s
     try:
@@ -420,6 +432,14 @@ async def lifespan(app: FastAPI):
             print(f"Error starting sync health service: {e}")
     asyncio.create_task(_start_sync_health_delayed())
 
+    # CANARY-001 / Issue #411: Canary watcher — 5-min cycle. Disabled by
+    # default (CANARY_ENABLED=1 to enable on staging/dev). Service self-
+    # gates internally; the start() call is a no-op when not enabled.
+    try:
+        canary_service.start()
+    except Exception as e:
+        print(f"Error starting canary service: {e}")
+
     # BACKLOG-001 / CAPACITY-CONSOLIDATE (#428): instantiate the unified
     # CapacityManager (this also wires the slot-release → backlog-drain
     # callback internally) and spawn the 60s maintenance loop. The
@@ -446,21 +466,29 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Error wiring CapacityManager: {e}")
 
-    # Recover orphaned regular task executions (Issue #128)
+    # Recover orphaned regular task executions (Issue #128).
+    # #748: flip the warming-up gate open in a finally block so the
+    # /internal/execute-task route doesn't 503 forever if recovery raises.
+    from services.cleanup_service import (
+        mark_startup_recovery_complete,
+        recover_orphaned_executions,
+    )
     try:
-        from services.cleanup_service import recover_orphaned_executions
         task_recovery = await recover_orphaned_executions()
         if task_recovery["recovered"] > 0:
             print(
                 f"Task execution recovery: "
                 f"recovered={task_recovery['recovered']}, "
-                f"still_running={task_recovery['still_running']}"
+                f"still_running={task_recovery['still_running']}, "
+                f"skipped_grace={task_recovery.get('skipped_grace', 0)}"
             )
         else:
             print("Task execution recovery: no orphaned executions found")
     except Exception as e:
         print(f"Error recovering task executions: {e}")
         # Don't fail startup - recovery is important but not critical
+    finally:
+        mark_startup_recovery_complete()
 
     # Start Slack channel transport (Socket Mode or webhook)
     try:
@@ -481,8 +509,13 @@ async def lifespan(app: FastAPI):
                 if _slack_transport.is_connected:
                     print("Slack transport started (Socket Mode)")
                 else:
-                    print("Slack Socket Mode: connection failed (check logs). Backend continues without Slack.")
-                    _slack_transport = None
+                    # #708: keep the transport reference — its startup recovery
+                    # supervisor (slack_socket.py:_startup_supervisor) is now
+                    # retrying in the background and will populate contexts
+                    # when the network recovers. Setting _slack_transport=None
+                    # here would orphan the supervisor and leave Slack offline
+                    # until the next manual restart.
+                    print("Slack Socket Mode: initial connection failed; recovery supervisor retrying in background.")
             else:
                 print("Slack Socket Mode: no app token configured (set slack_app_token in Settings)")
         else:
@@ -583,6 +616,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Error stopping audit retention service: {e}")
 
+    # Shutdown DB vacuum service (#772)
+    try:
+        db_vacuum_service.stop()
+        print("DB vacuum service stopped")
+    except Exception as e:
+        print(f"Error stopping DB vacuum service: {e}")
+
     # Shutdown cleanup service
     try:
         cleanup_service.stop()
@@ -632,6 +672,13 @@ async def lifespan(app: FastAPI):
         print("Sync health service stopped")
     except Exception as e:
         print(f"Error stopping sync health service: {e}")
+
+    # Shutdown canary service (CANARY-001 / Issue #411)
+    try:
+        canary_service.stop()
+        print("Canary service stopped")
+    except Exception as e:
+        print(f"Error stopping canary service: {e}")
 
     # Shutdown operator queue sync service
     try:
@@ -770,18 +817,19 @@ app.include_router(ops_router)
 app.include_router(public_links_router)
 app.include_router(public_router)
 app.include_router(files_router)  # FILES-001: /api/files/{id} — token-gated downloads
-app.include_router(site_router)   # SITE-001: /site/{token}/{path} — agent website proxy
 app.include_router(setup_router)
 app.include_router(telemetry_router)
 app.include_router(logs_router)
 app.include_router(agent_dashboard_router)
 app.include_router(audit_log_router)  # SEC-001 / #20: Platform audit log (Phase 1)
+app.include_router(canary_router)  # CANARY-001 / #411: Invariant violations
 app.include_router(skills_router) # Skills Management System
 app.include_router(internal_router)  # Internal agent-to-backend endpoints (no auth)
 app.include_router(tags_router)  # Agent Tags (ORG-001)
 app.include_router(system_views_router)  # System Views (ORG-001 Phase 2)
 app.include_router(notifications_router)  # Agent Notifications (NOTIF-001)
 app.include_router(messages_router)  # Proactive Messaging (#321)
+app.include_router(public_memory_router)  # MEM-001 write path (#888)
 app.include_router(subscriptions_router)  # Subscription Management (SUB-001)
 app.include_router(monitoring_router)  # Agent Monitoring (MON-001)
 app.include_router(slack_public_router)  # Slack Integration Public (SLACK-001)
@@ -799,8 +847,44 @@ app.include_router(voice_router)  # Voice Chat (VOICE-001)
 app.include_router(event_subscriptions_router)  # Agent Event Subscriptions (EVT-001)
 app.include_router(users_router)  # User Management (ROLE-001)
 app.include_router(debug_router)  # #306 soak dashboard
+app.include_router(a2a_router)  # A2A Agent Cards (#737)
+app.include_router(admin_recovery_router)  # Soft-delete admin recovery (#834 Phase 1c)
 app.include_router(webhooks_router)  # Webhook Triggers (WEBHOOK-001, #291)
 app.include_router(ws_tickets_router)  # WebSocket auth tickets (#550)
+
+
+# #847 Phase 0 — Enterprise modules (closed-source companion submodule
+# at `src/backend/enterprise/`, repo `Abilityai/trinity-enterprise`).
+# The submodule is OPTIONAL: customers running the public repo without
+# enterprise access clone without it, and the ImportError below silently
+# no-ops. When mounted, `register_enterprise(app)` installs the SSO /
+# SCIM / SIEM routers under `/api/enterprise/*`. The function is
+# idempotent (guards on `app.state.enterprise_registered`). Entitlement
+# gating happens per-endpoint via `requires_entitlement(feature_id)`
+# from `dependencies.py` — endpoints are mounted unconditionally and
+# the gate decides whether to serve them. This keeps the wiring
+# deterministic regardless of license state.
+#
+# Import path is `enterprise.backend.register_enterprise`: the private
+# repo is restructured into `backend/` and `frontend/` subdirs so the
+# same repo can be dual-mounted (`src/backend/enterprise/` for Python,
+# `src/frontend/src/enterprise/` for Vite). See
+# `docs/planning/ENTERPRISE_ARCHITECTURE.md` for rationale.
+try:
+    from enterprise.backend import register_enterprise  # type: ignore[import-not-found]
+    register_enterprise(app)
+    # `print(..., flush=True)`: this import block runs at module init,
+    # which is BEFORE `lifespan` calls `setup_logging()`. The default
+    # Python logger drops INFO-level records, so `logger.info` here
+    # would be silently swallowed. Print to stdout instead — docker
+    # logs captures it for ops + the CI workflow greps for it.
+    print("Trinity Enterprise modules registered", flush=True)
+except ImportError:
+    print(
+        "Trinity Enterprise submodule not present — OSS-only build "
+        "(this is normal; enterprise modules are an optional private submodule)",
+        flush=True,
+    )
 
 
 # WebSocket endpoint
@@ -972,10 +1056,13 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now()}
 
 
-# Version endpoint
-@app.get("/api/version")
-async def get_version(current_user: User = Depends(get_current_user)):
-    """Get Trinity platform version information. Requires authentication (SEC-180)."""
+def _build_version_payload(voice_enabled: bool) -> dict:
+    """Pure dict-builder for the `/api/version` payload (#926-testable).
+
+    Extracted from the FastAPI handler so the env-var → response mapping
+    can be tested without pulling main.py's full router graph through
+    importlib (opentelemetry, slack_sdk, twilio, …).
+    """
     import os
     from pathlib import Path
 
@@ -990,6 +1077,9 @@ async def get_version(current_user: User = Depends(get_current_user)):
             version = version_file.read_text().strip()
             break
 
+    git_commit = os.getenv("GIT_COMMIT", "unknown")
+    git_commit_short = git_commit[:8] if git_commit != "unknown" else "unknown"
+
     return {
         "version": version,
         "platform": "trinity",
@@ -1000,8 +1090,27 @@ async def get_version(current_user: User = Depends(get_current_user)):
         },
         "runtimes": ["claude-code", "gemini-cli"],
         "build_date": os.getenv("BUILD_DATE", "unknown"),
-        "voice_enabled": VOICE_ENABLED and bool(GEMINI_API_KEY),
+        "git_commit": git_commit,
+        "git_commit_short": git_commit_short,
+        "git_commit_subject": os.getenv("GIT_COMMIT_SUBJECT", "unknown"),
+        "git_commit_timestamp": os.getenv("GIT_COMMIT_TIMESTAMP", "unknown"),
+        "git_branch": os.getenv("GIT_BRANCH", "unknown"),
+        "voice_enabled": voice_enabled,
     }
+
+
+# Version endpoint
+@app.get("/api/version")
+async def get_version(current_user: User = Depends(get_current_user)):
+    """Get Trinity platform version information. Requires authentication (SEC-180).
+
+    Build-time provenance fields (#926) — `git_commit`, `git_commit_short`,
+    `git_commit_subject`, `git_commit_timestamp`, `git_branch`, `build_date` —
+    come from Dockerfile ARG/ENV wired through docker-compose
+    `backend.build.args` and `scripts/deploy/start.sh`. Default to "unknown"
+    when the build args are absent (local dev / volume-mount workflows).
+    """
+    return _build_version_payload(VOICE_ENABLED and bool(GEMINI_API_KEY))
 
 
 # User info endpoint

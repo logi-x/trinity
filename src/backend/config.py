@@ -45,9 +45,6 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "")  # Set in .env or docker-compose fo
 # When set, enables "Copy External Link" button in PublicLinksPanel
 PUBLIC_CHAT_URL = os.getenv("PUBLIC_CHAT_URL", "")
 
-# Fixed convention: agent web servers listen on this port (SITE-001)
-SITE_PORT = 3000
-
 # Email Service Configuration (for public link verification)
 EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "resend")  # "console", "smtp", "sendgrid", "resend"
 SMTP_HOST = os.getenv("SMTP_HOST", "")
@@ -109,7 +106,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", 
 
 # Voice Chat Configuration (VOICE-001)
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "true").lower() == "true"
-VOICE_MODEL = os.getenv("VOICE_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+VOICE_MODEL = os.getenv("VOICE_MODEL", "models/gemini-3.1-flash-live-preview")
 VOICE_MAX_DURATION = int(os.getenv("VOICE_MAX_DURATION", "300"))  # seconds
 
 # Default GitHub Template Repositories

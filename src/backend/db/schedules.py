@@ -21,6 +21,12 @@ from utils.helpers import iso_cutoff, utc_now_iso, to_utc_iso, parse_iso_timesta
 
 logger = logging.getLogger(__name__)
 
+# #73: chunk size for scoped `IN (...)` lookups. SQLite caps host parameters at
+# SQLITE_MAX_VARIABLE_NUMBER (999 before SQLite 3.32). Keep a safe margin below
+# that so a large accessible-agent set can't blow the limit. Read as a module
+# global so tests can monkeypatch it to exercise the multi-chunk path.
+_SQLITE_MAX_IN_VARS = 900
+
 # #378: Error-message marker written by cleanup_service._process_stale_slot_reclaims
 # when Phase 3 fails an execution. Used to scope the residual-race WARNING log
 # below so it doesn't misfire on other legitimate FAILED→SUCCESS transitions
@@ -92,7 +98,9 @@ class ScheduleOperations:
             updated_at=parse_iso_timestamp(row["updated_at"]),
             last_run_at=parse_iso_timestamp(row["last_run_at"]) if row["last_run_at"] else None,
             next_run_at=parse_iso_timestamp(row["next_run_at"]) if row["next_run_at"] else None,
-            timeout_seconds=row["timeout_seconds"] if "timeout_seconds" in row_keys and row["timeout_seconds"] else 900,
+            # #913: NULL ⇒ inherit from agent_ownership.execution_timeout_seconds.
+            # Do NOT fall through to a constant here — that was the bug.
+            timeout_seconds=row["timeout_seconds"] if "timeout_seconds" in row_keys else None,
             allowed_tools=allowed_tools,
             model=row["model"] if "model" in row_keys else None,
             # Retry configuration (RETRY-001)
@@ -101,7 +109,10 @@ class ScheduleOperations:
             # Validation configuration (VALIDATE-001)
             validation_enabled=bool(row["validation_enabled"]) if "validation_enabled" in row_keys and row["validation_enabled"] is not None else False,
             validation_prompt=row["validation_prompt"] if "validation_prompt" in row_keys else None,
-            validation_timeout_seconds=row["validation_timeout_seconds"] if "validation_timeout_seconds" in row_keys and row["validation_timeout_seconds"] is not None else 120
+            validation_timeout_seconds=row["validation_timeout_seconds"] if "validation_timeout_seconds" in row_keys and row["validation_timeout_seconds"] is not None else 120,
+            # Webhook trigger (WEBHOOK-001 / #647 follow-up)
+            webhook_enabled=bool(row["webhook_enabled"]) if "webhook_enabled" in row_keys and row["webhook_enabled"] is not None else False,
+            webhook_token=row["webhook_token"] if "webhook_token" in row_keys else None,
         )
 
     @staticmethod
@@ -157,6 +168,8 @@ class ScheduleOperations:
             validates_execution_id=row["validates_execution_id"] if "validates_execution_id" in row_keys else None,
             # Auto-compact observability (Bundle B)
             compact_metadata=row["compact_metadata"] if "compact_metadata" in row_keys else None,
+            # Reader-race auto-retry (#678)
+            retry_count=row["retry_count"] if "retry_count" in row_keys and row["retry_count"] is not None else 0,
         )
 
     @staticmethod
@@ -284,49 +297,98 @@ class ScheduleOperations:
                 return None
 
     def get_schedule(self, schedule_id: str) -> Optional[Schedule]:
-        """Get a schedule by ID."""
+        """Get a schedule by ID. Excludes soft-deleted schedules (#834)."""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM agent_schedules WHERE id = ?", (schedule_id,))
+            cursor.execute(
+                "SELECT * FROM agent_schedules WHERE id = ? AND deleted_at IS NULL",
+                (schedule_id,),
+            )
             row = cursor.fetchone()
             return self._row_to_schedule(row) if row else None
 
     def list_agent_schedules(self, agent_name: str) -> List[Schedule]:
-        """List all schedules for an agent."""
+        """List all schedules for an agent. Excludes soft-deleted (#834)."""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM agent_schedules WHERE agent_name = ?
+                SELECT * FROM agent_schedules
+                WHERE agent_name = ? AND deleted_at IS NULL
                 ORDER BY created_at DESC
             """, (agent_name,))
             return [self._row_to_schedule(row) for row in cursor.fetchall()]
 
-    def list_all_enabled_schedules(self) -> List[Schedule]:
-        """List all enabled schedules (for scheduler initialization)."""
+    def find_active_schedules_exceeding_timeout(
+        self, agent_name: str, ceiling_seconds: int
+    ) -> List[Dict]:
+        """Active schedules whose ``timeout_seconds > ceiling_seconds`` (#929).
+
+        Returns a thin list of ``{id, name, timeout_seconds}`` dicts for
+        the agent-cap-lowering error payload — the caller surfaces them
+        so the operator knows which schedules need editing first.
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM agent_schedules WHERE enabled = 1
-                ORDER BY agent_name, name
+                SELECT id, name, timeout_seconds
+                FROM agent_schedules
+                WHERE agent_name = ?
+                  AND deleted_at IS NULL
+                  AND timeout_seconds > ?
+                ORDER BY timeout_seconds DESC
+            """, (agent_name, ceiling_seconds))
+            return [
+                {"id": row["id"], "name": row["name"], "timeout_seconds": row["timeout_seconds"]}
+                for row in cursor.fetchall()
+            ]
+
+    def list_all_enabled_schedules(self) -> List[Schedule]:
+        """List all enabled schedules (for scheduler initialization).
+
+        Two soft-delete filters apply:
+        - #834 Phase 1a: skip schedules whose *agent* is soft-deleted
+          (`agent_ownership.deleted_at`) — otherwise the scheduler fires
+          every enabled schedule for a soft-deleted agent and writes a
+          `schedule_executions` failure row per tick until purge.
+        - #834 Phase 1b: skip *schedules* that are themselves
+          soft-deleted (`agent_schedules.deleted_at`).
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT s.* FROM agent_schedules s
+                JOIN agent_ownership ao ON ao.agent_name = s.agent_name
+                WHERE s.enabled = 1
+                  AND s.deleted_at IS NULL
+                  AND ao.deleted_at IS NULL
+                ORDER BY s.agent_name, s.name
             """)
             return [self._row_to_schedule(row) for row in cursor.fetchall()]
 
     def list_all_disabled_schedules(self) -> List[Schedule]:
-        """List all disabled schedules (for resume operations)."""
+        """List all disabled schedules (for resume operations).
+
+        Excludes soft-deleted (#834).
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM agent_schedules WHERE enabled = 0
+                SELECT * FROM agent_schedules
+                WHERE enabled = 0 AND deleted_at IS NULL
                 ORDER BY agent_name, name
             """)
             return [self._row_to_schedule(row) for row in cursor.fetchall()]
 
     def list_all_schedules(self) -> List[Schedule]:
-        """List all schedules across all agents (for system agent overview)."""
+        """List all schedules across all agents (for system agent overview).
+
+        Excludes soft-deleted (#834).
+        """
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM agent_schedules
+                WHERE deleted_at IS NULL
                 ORDER BY agent_name, name
             """)
             return [self._row_to_schedule(row) for row in cursor.fetchall()]
@@ -417,27 +479,167 @@ class ScheduleOperations:
             return self.get_schedule(schedule_id)
 
     def delete_schedule(self, schedule_id: str, username: str) -> bool:
-        """Delete a schedule and its executions."""
+        """Soft-delete a schedule (Issue #834 Phase 1b).
+
+        Sets `agent_schedules.deleted_at = NOW`. Executions stay intact —
+        they're billing-relevant (subscription_id rollup) and #772's
+        retention sweep ages them out independently.
+
+        The scheduler service filters `deleted_at IS NULL` on its
+        enabled-schedules poll, so soft-deleted schedules stop firing
+        immediately. `cleanup_service.py` hard-purges rows past
+        `schedule_soft_delete_retention_days` (default 30).
+
+        Idempotent: re-deleting an already-soft-deleted schedule still
+        returns True provided the caller has permission.
+        """
+        from utils.helpers import utc_now_iso
+
         user = self._user_ops.get_user_by_username(username)
         if not user:
             return False
 
-        schedule = self.get_schedule(schedule_id)
-        if not schedule:
-            return False
-
-        # Check permission (owner or admin)
-        if user["role"] != "admin" and schedule.owner_id != user["id"]:
-            return False
-
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # Delete executions first
-            cursor.execute("DELETE FROM schedule_executions WHERE schedule_id = ?", (schedule_id,))
-            # Delete schedule
-            cursor.execute("DELETE FROM agent_schedules WHERE id = ?", (schedule_id,))
+            # Permission check must read the row *including* soft-deleted
+            # ones. `get_schedule()` filters `deleted_at IS NULL` (#834
+            # Phase 1b), so using it here made a retry on an
+            # already-soft-deleted schedule fall through to `return
+            # False` → the router turned that into a misleading 403
+            # "access denied" for the legitimate owner. Read owner_id
+            # directly so re-delete is genuinely idempotent.
+            cursor.execute(
+                "SELECT owner_id, deleted_at FROM agent_schedules WHERE id = ?",
+                (schedule_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            if user["role"] != "admin" and row["owner_id"] != user["id"]:
+                return False
+
+            if row["deleted_at"] is not None:
+                # Already soft-deleted and the caller is authorised —
+                # idempotent success (router → 204).
+                return True
+
+            cursor.execute(
+                "UPDATE agent_schedules SET deleted_at = ? "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (utc_now_iso(), schedule_id),
+            )
             conn.commit()
             return cursor.rowcount > 0
+
+    def purge_schedule(self, schedule_id: str) -> bool:
+        """Hard-delete a soft-deleted schedule (#834 Phase 1b).
+
+        Called by the cleanup_service retention sweep. Refuses to purge
+        a live (non-soft-deleted) row — callers must soft-delete first.
+        Also removes `schedule_executions` rows for the schedule —
+        consistent with the previous hard-delete behavior and with
+        what cascade_delete does at agent purge time.
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT deleted_at FROM agent_schedules WHERE id = ?",
+                (schedule_id,),
+            )
+            row = cursor.fetchone()
+            if not row or row["deleted_at"] is None:
+                return False
+
+            cursor.execute(
+                "DELETE FROM schedule_executions WHERE schedule_id = ?",
+                (schedule_id,),
+            )
+            cursor.execute(
+                "DELETE FROM agent_schedules WHERE id = ?",
+                (schedule_id,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def recover_schedule(self, schedule_id: str) -> bool:
+        """Recover a soft-deleted schedule by clearing `deleted_at` (#834).
+
+        Refuses to operate on a row that doesn't exist or is already
+        live (`deleted_at IS NULL`). Returns True on successful
+        recovery. The schedule reappears on the scheduler's
+        firing list on the next poll cycle if it was enabled at the
+        time of soft-delete.
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE agent_schedules SET deleted_at = NULL "
+                "WHERE id = ? AND deleted_at IS NOT NULL",
+                (schedule_id,),
+            )
+            if cursor.rowcount > 0:
+                conn.commit()
+                return True
+            return False
+
+    def list_soft_deleted_schedules(
+        self, agent_name: Optional[str] = None, limit: int = 200
+    ) -> list:
+        """List currently-soft-deleted schedules with their `deleted_at`.
+
+        If `agent_name` is given, scopes to that agent's schedules
+        (admin endpoint pattern: GET /api/admin/agents/{name}/schedules/
+        soft-deleted). With `agent_name=None`, returns soft-deleted
+        schedules across the fleet (admin-only).
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if agent_name is None:
+                cursor.execute(
+                    "SELECT id, agent_name, name, cron_expression, message, "
+                    "       owner_id, enabled, deleted_at "
+                    "FROM agent_schedules "
+                    "WHERE deleted_at IS NOT NULL "
+                    "ORDER BY deleted_at DESC "
+                    "LIMIT ?",
+                    (limit,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT id, agent_name, name, cron_expression, message, "
+                    "       owner_id, enabled, deleted_at "
+                    "FROM agent_schedules "
+                    "WHERE deleted_at IS NOT NULL AND agent_name = ? "
+                    "ORDER BY deleted_at DESC "
+                    "LIMIT ?",
+                    (agent_name, limit),
+                )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def find_soft_deleted_schedules_past_retention(
+        self, retention_days: int, limit: int = 5000
+    ) -> list:
+        """List schedule ids whose `deleted_at` is older than `retention_days`.
+
+        Used by the cleanup sweep to find rows ready for hard-purge.
+        Bounded by `limit`.
+        """
+        from utils.helpers import iso_cutoff
+
+        if retention_days <= 0 or limit <= 0:
+            return []
+
+        cutoff = iso_cutoff(hours=retention_days * 24)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM agent_schedules "
+                "WHERE deleted_at IS NOT NULL AND deleted_at < ? "
+                "LIMIT ?",
+                (cutoff, limit),
+            )
+            return [row["id"] for row in cursor.fetchall()]
 
     def set_schedule_enabled(self, schedule_id: str, enabled: bool) -> bool:
         """Enable or disable a schedule.
@@ -545,7 +747,8 @@ class ScheduleOperations:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT * FROM agent_schedules WHERE webhook_token = ?",
+                "SELECT * FROM agent_schedules "
+                "WHERE webhook_token = ? AND deleted_at IS NULL",
                 (token,),
             )
             row = cursor.fetchone()
@@ -582,7 +785,8 @@ class ScheduleOperations:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT webhook_token, webhook_enabled FROM agent_schedules WHERE id = ?",
+                "SELECT webhook_token, webhook_enabled FROM agent_schedules "
+                "WHERE id = ? AND deleted_at IS NULL",
                 (schedule_id,),
             )
             row = cursor.fetchone()
@@ -1003,16 +1207,25 @@ class ScheduleOperations:
         execution_log: str = None,
         claude_session_id: str = None,
         compact_metadata: str = None,
+        retry_count: Optional[int] = None,
     ) -> bool:
         """Update execution status when completed.
 
-        CAS contract (RELIABILITY-005): SUCCESS writes are unconditional — the agent's
-        own completion result always wins. Non-success terminal writes (FAILED, CANCELLED)
-        are guarded so they cannot overwrite an already-terminal status, preventing
-        cleanup paths from silently clobbering a real completion.
+        CAS contract:
+        - SUCCESS writes win over RUNNING / QUEUED / PENDING_RETRY / SKIPPED and
+          over a phantom-stale FAILED (so a real completion lands even if a
+          cleanup path misfired first — see #378). SUCCESS is **blocked** when
+          the row is already CANCELLED: a user cancel is authoritative and the
+          late-arriving agent reply must not be reported as a deliverable (#671).
+        - Non-success terminal writes (FAILED, CANCELLED) are guarded against
+          overwriting any already-terminal status (RELIABILITY-005), preventing
+          cleanup paths from silently clobbering a real completion.
 
         Args:
             claude_session_id: Claude Code session ID for --resume support (EXEC-023)
+            retry_count: #678 — number of in-line auto-retries used to produce
+                this terminal write. None leaves the column unchanged (default
+                0 from migration). 1 means the reader-race retry fired once.
         """
         # Terminal states that a non-success write must not overwrite.
         _TERMINAL = (
@@ -1037,32 +1250,47 @@ class ScheduleOperations:
             completed_at = parse_iso_timestamp(utc_now_iso())
             duration_ms = int((completed_at - started_at).total_seconds() * 1000)
 
+            # #678: optionally update retry_count alongside the terminal write.
+            # COALESCE preserves prior value when caller passes None so other
+            # update paths (cleanup, scheduler) don't accidentally zero it.
+            if retry_count is None:
+                retry_set_sql = ""
+                retry_params: tuple = ()
+            else:
+                retry_set_sql = ", retry_count = ?"
+                retry_params = (int(retry_count),)
+
             if status == TaskExecutionStatus.SUCCESS:
-                # Agent's own completion result always wins.
-                cursor.execute("""
+                # Agent's own completion result wins over everything except a
+                # user-issued cancel (#671). A late "I'm done!" from Claude Code
+                # after the operator pulled the plug must not flip the row to
+                # success — that hides incomplete deliverables and silently
+                # advances the schedule's next_run_at.
+                cursor.execute(f"""
                     UPDATE schedule_executions
                     SET status = ?, completed_at = ?, duration_ms = ?, response = ?, error = ?,
                         context_used = ?, context_max = ?, cost = ?, tool_calls = ?,
-                        execution_log = ?, claude_session_id = ?, compact_metadata = ?
-                    WHERE id = ?
+                        execution_log = ?, claude_session_id = ?, compact_metadata = ?{retry_set_sql}
+                    WHERE id = ? AND status != ?
                 """, (
                     status, to_utc_iso(completed_at), duration_ms, response, error,
                     context_used, context_max, cost, tool_calls, execution_log,
-                    claude_session_id, compact_metadata, execution_id,
+                    claude_session_id, compact_metadata, *retry_params, execution_id,
+                    TaskExecutionStatus.CANCELLED,
                 ))
             else:
                 # Non-success terminal write: block if already terminal so cleanup
                 # paths cannot overwrite a real completion (RELIABILITY-005).
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE schedule_executions
                     SET status = ?, completed_at = ?, duration_ms = ?, response = ?, error = ?,
                         context_used = ?, context_max = ?, cost = ?, tool_calls = ?,
-                        execution_log = ?, claude_session_id = ?, compact_metadata = ?
+                        execution_log = ?, claude_session_id = ?, compact_metadata = ?{retry_set_sql}
                     WHERE id = ? AND status NOT IN (?, ?, ?, ?)
                 """, (
                     status, to_utc_iso(completed_at), duration_ms, response, error,
                     context_used, context_max, cost, tool_calls, execution_log,
-                    claude_session_id, compact_metadata, execution_id, *_TERMINAL,
+                    claude_session_id, compact_metadata, *retry_params, execution_id, *_TERMINAL,
                 ))
 
             conn.commit()
@@ -1309,6 +1537,7 @@ class ScheduleOperations:
                     COUNT(*) as total,
                     SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) as enabled
                 FROM agent_schedules
+                WHERE deleted_at IS NULL
                 GROUP BY agent_name
             """)
 
@@ -1440,6 +1669,42 @@ class ScheduleOperations:
                 (agent_name,),
             ).fetchone()
             return bool(row[0]) if row else False
+
+    def get_all_git_auto_sync_enabled(
+        self, agent_names: Optional[set] = None
+    ) -> Dict[str, bool]:
+        """#73: bulk read of the auto-sync flag in one query, optionally scoped
+        to `agent_names` (mirrors get_all_permission_edges). Removes the N+1 in
+        the /sync-health dashboard endpoint. Agents without a config row are
+        absent from the result (caller defaults to False).
+
+        `None` = whole fleet; an empty set = empty result (an empty scope must
+        NOT fall through to the whole-fleet query, and `IN ()` is invalid SQL).
+
+        Scoped lookups chunk the `IN (...)` list at `_SQLITE_MAX_IN_VARS` so a
+        large accessible-agent set can't exceed SQLite's host-parameter cap.
+        """
+        if agent_names is not None and not agent_names:
+            return {}
+        with get_db_connection() as conn:
+            if agent_names is None:
+                rows = conn.execute(
+                    "SELECT agent_name, auto_sync_enabled FROM agent_git_config"
+                ).fetchall()
+                return {row[0]: bool(row[1]) for row in rows}
+
+            result: Dict[str, bool] = {}
+            names = list(agent_names)
+            for start in range(0, len(names), _SQLITE_MAX_IN_VARS):
+                chunk = names[start:start + _SQLITE_MAX_IN_VARS]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"SELECT agent_name, auto_sync_enabled FROM agent_git_config "
+                    f"WHERE agent_name IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                result.update({row[0]: bool(row[1]) for row in rows})
+            return result
 
     def get_freeze_schedules_if_sync_failing(self, agent_name: str) -> bool:
         """#389: read the freeze-schedules flag. False if config missing."""
@@ -1669,6 +1934,104 @@ class ScheduleOperations:
             conn.commit()
             return cursor.rowcount
 
+    def prune_execution_logs(self, retention_days: int, chunk_size: int = 500) -> int:
+        """Null `execution_log` on terminal executions older than retention_days.
+
+        Issue #772: the JSONL transcript dominates schedule_executions row size
+        (~150–190 KB/row). Nulling preserves the row + metadata (cost, duration,
+        agent, status) while reclaiming the bulk of the space. Runs in chunks
+        to keep the write lock short — each chunk commits before the next, so
+        a 3 GB backfill won't block a live system.
+
+        Args:
+            retention_days: Null logs older than this. 0 disables the sweep.
+            chunk_size: Max rows nulled per commit cycle (default 500).
+
+        Returns:
+            Total rows nulled across all chunks.
+        """
+        if retention_days <= 0 or chunk_size <= 0:
+            return 0
+
+        cutoff = iso_cutoff(hours=retention_days * 24)
+        total = 0
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            while True:
+                # SELECT-then-UPDATE-by-id keeps the WHERE predicate aligned
+                # with idx_executions_completed_terminal (#772) and avoids
+                # depending on SQLITE_ENABLE_UPDATE_DELETE_LIMIT.
+                cursor.execute(
+                    """
+                    SELECT id FROM schedule_executions
+                    WHERE status IN ('success', 'failed', 'cancelled', 'skipped')
+                      AND completed_at IS NOT NULL
+                      AND completed_at < ?
+                      AND execution_log IS NOT NULL
+                    LIMIT ?
+                    """,
+                    (cutoff, chunk_size),
+                )
+                ids = [row["id"] for row in cursor.fetchall()]
+                if not ids:
+                    break
+                placeholders = ",".join("?" * len(ids))
+                cursor.execute(
+                    f"UPDATE schedule_executions SET execution_log = NULL "
+                    f"WHERE id IN ({placeholders})",
+                    ids,
+                )
+                conn.commit()
+                total += cursor.rowcount
+                if len(ids) < chunk_size:
+                    break
+        return total
+
+    def prune_execution_rows(self, retention_days: int, chunk_size: int = 500) -> int:
+        """Delete terminal schedule_executions rows older than retention_days.
+
+        Issue #772: deeper retention beyond `prune_execution_logs` — fully
+        removes ancient rows. Chunked DELETE keeps the write lock short.
+
+        Args:
+            retention_days: Delete rows older than this. 0 disables the sweep.
+            chunk_size: Max rows deleted per commit cycle (default 500).
+
+        Returns:
+            Total rows deleted across all chunks.
+        """
+        if retention_days <= 0 or chunk_size <= 0:
+            return 0
+
+        cutoff = iso_cutoff(hours=retention_days * 24)
+        total = 0
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            while True:
+                cursor.execute(
+                    """
+                    SELECT id FROM schedule_executions
+                    WHERE status IN ('success', 'failed', 'cancelled', 'skipped')
+                      AND completed_at IS NOT NULL
+                      AND completed_at < ?
+                    LIMIT ?
+                    """,
+                    (cutoff, chunk_size),
+                )
+                ids = [row["id"] for row in cursor.fetchall()]
+                if not ids:
+                    break
+                placeholders = ",".join("?" * len(ids))
+                cursor.execute(
+                    f"DELETE FROM schedule_executions WHERE id IN ({placeholders})",
+                    ids,
+                )
+                conn.commit()
+                total += cursor.rowcount
+                if len(ids) < chunk_size:
+                    break
+        return total
+
     def get_running_executions_with_agent_info(self) -> List[Dict]:
         """Get all running executions with effective timeout for watchdog.
 
@@ -1676,7 +2039,7 @@ class ScheduleOperations:
         Timeout resolution order:
         1. Schedule's timeout_seconds (for scheduled executions)
         2. Agent's execution_timeout_seconds (for manual/MCP executions)
-        3. Fallback default of 900s
+        3. Fallback default of 3600s (#665)
 
         Returns:
             List of dicts with id, schedule_id, agent_name, started_at,
@@ -1686,7 +2049,7 @@ class ScheduleOperations:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT e.id, e.schedule_id, e.agent_name, e.started_at,
-                       COALESCE(s.timeout_seconds, ao.execution_timeout_seconds, 900) as timeout_seconds
+                       COALESCE(s.timeout_seconds, ao.execution_timeout_seconds, 3600) as timeout_seconds
                 FROM schedule_executions e
                 LEFT JOIN agent_schedules s ON e.schedule_id = s.id
                 LEFT JOIN agent_ownership ao ON e.agent_name = ao.agent_name

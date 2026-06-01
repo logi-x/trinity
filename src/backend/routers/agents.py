@@ -256,14 +256,15 @@ async def get_all_sync_health(
     accessible = {a["name"] for a in get_accessible_agents(current_user)}
     rows = db.list_sync_states()
     by_name = {r["agent_name"]: r for r in rows if r["agent_name"] in accessible}
+    # #73: one scoped query instead of an N+1 per-agent lookup.
+    auto_sync_map = db.get_all_git_auto_sync_enabled(accessible)
 
     entries = []
     for name in sorted(accessible):
         row = by_name.get(name)
-        auto_sync = db.get_git_auto_sync_enabled(name)
         entries.append({
             "agent_name": name,
-            "auto_sync_enabled": bool(auto_sync),
+            "auto_sync_enabled": auto_sync_map.get(name, False),
             "last_sync_at": (row or {}).get("last_sync_at"),
             "last_sync_status": (row or {}).get("last_sync_status") or "never",
             "consecutive_failures": (row or {}).get("consecutive_failures") or 0,
@@ -330,9 +331,37 @@ async def get_agent_endpoint(agent_name: AuthorizedAgentByName, request: Request
     """Get details of a specific agent."""
     agent = get_agent_by_name(agent_name)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    agent_dict = agent.dict() if hasattr(agent, 'dict') else dict(agent)
+        # #834 Phase 1c: a just-recovered agent has a live
+        # agent_ownership row (deleted_at cleared, so the auth
+        # dependency above passed) but NO container — soft-delete
+        # removed it and recovery is metadata-only. Without this
+        # fallback the operator can't even see the recovered agent
+        # to start it: recovery would be a dead-end. Synthesize a
+        # DB-backed "stopped, no container" representation so the UI
+        # can list it and offer a Start button. (Container recreate
+        # on recover is deferred Phase 2.)
+        owner_row = db.get_agent_owner(agent_name)
+        if not owner_row:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        agent_dict = {
+            "name": agent_name,
+            "type": "",
+            "status": "stopped",
+            "port": 0,
+            "created": owner_row.get("created_at"),
+            "resources": db.get_resource_limits(agent_name) or {},
+            "container_id": None,
+            "template": None,
+            "runtime": "claude-code",
+            "base_image_version": None,
+            # Signal to the UI that this agent has no container yet —
+            # recovered (or otherwise container-less). Drives a
+            # "Start to bring online" affordance instead of the normal
+            # stopped-container controls.
+            "needs_start": True,
+        }
+    else:
+        agent_dict = agent.dict() if hasattr(agent, 'dict') else dict(agent)
     user_data = db.get_user_by_username(current_user.username)
     is_admin = user_data and user_data["role"] == "admin"
 
@@ -419,30 +448,26 @@ async def delete_agent_endpoint(agent_name: str, request: Request, current_user:
     if not container:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    # Issue #834 Phase 1a: agent delete is now a SOFT-delete. We stop +
+    # remove the container (Docker containers are ephemeral by design
+    # per the issue), and mark `agent_ownership.deleted_at`. Everything
+    # else — workspace/shared/public volumes, schedules, chat history,
+    # sharing, permissions, MCP key, credentials, avatars — is
+    # preserved until the retention sweep in cleanup_service.py runs
+    # `purge_agent_ownership()` after `agent_soft_delete_retention_days`
+    # (default 180). At that point the #816 cascade_delete primitive
+    # tears down all the child rows and on-disk artifacts in one shot.
+
     try:
         await container_stop(container)
         await container_remove(container)
     except Exception as e:
         logger.warning(f"Error stopping/removing container: {e}")
 
-    # Delete per-agent persistent volume
-    try:
-        agent_volume_name = f"agent-{agent_name}-workspace"
-        volume = await volume_get(agent_volume_name)
-        await volume_remove(volume)
-    except docker.errors.NotFound:
-        pass
-    except Exception as e:
-        logger.warning(f"Failed to delete workspace volume for agent {agent_name}: {e}")
-
-    # Delete all schedules for this agent
-    # Dedicated scheduler syncs from database automatically
-    db.delete_agent_schedules(agent_name)
-
-    # BACKLOG-001: Cancel any queued backlog items before deleting the agent
-    # so they don't sit around in schedule_executions pointing at a dead agent.
-    # CAPACITY-CONSOLIDATE (#428): single CapacityManager.cancel_all_overflow
-    # covers both in-memory queue and persistent backlog.
+    # BACKLOG-001: in-flight queued tasks can't be recovered (the
+    # container is gone), so cancel them now rather than waiting for
+    # the purge sweep — keeps the operator queue + Redis primitives
+    # consistent immediately.
     try:
         from services.capacity_manager import get_capacity_manager
         await get_capacity_manager().cancel_all_overflow(
@@ -451,92 +476,9 @@ async def delete_agent_endpoint(agent_name: str, request: Request, current_user:
     except Exception as e:
         logger.warning(f"Failed to cancel backlog for agent {agent_name}: {e}")
 
-    # Delete git config if exists
-    git_service.delete_agent_git_config(agent_name)
-
-    # Delete agent's MCP API key
-    try:
-        db.delete_agent_mcp_api_key(agent_name)
-    except Exception as e:
-        logger.warning(f"Failed to delete MCP API key for agent {agent_name}: {e}")
-
-    # Delete agent permissions
-    try:
-        db.delete_agent_permissions(agent_name)
-    except Exception as e:
-        logger.warning(f"Failed to delete permissions for agent {agent_name}: {e}")
-
-    # Delete agent event subscriptions (EVT-001)
-    try:
-        db.delete_agent_event_subscriptions(agent_name)
-    except Exception as e:
-        logger.warning(f"Failed to delete event subscriptions for agent {agent_name}: {e}")
-
-    # Delete agent skills
-    try:
-        db.delete_agent_skills(agent_name)
-    except Exception as e:
-        logger.warning(f"Failed to delete skills for agent {agent_name}: {e}")
-
-    # Delete shared folder config and shared volume
-    try:
-        db.delete_shared_folder_config(agent_name)
-        shared_volume_name = db.get_shared_volume_name(agent_name)
-        try:
-            shared_volume = await volume_get(shared_volume_name)
-            await volume_remove(shared_volume)
-        except docker.errors.NotFound:
-            pass
-    except Exception as e:
-        logger.warning(f"Failed to delete shared folder config for agent {agent_name}: {e}")
-
-    # Delete per-agent public volume + shared-file rows + on-disk bytes
-    # (FILES-001). Backend connections don't PRAGMA foreign_keys=ON, so
-    # we can't rely on the FK ON DELETE CASCADE — follow the same explicit
-    # pattern used elsewhere in the codebase (see db.agent_settings.metadata
-    # :rename_agent which also manually updates all 16 child tables).
-    try:
-        stored_filenames = db.delete_shared_files_for_agent(agent_name)
-        for stored in stored_filenames:
-            try:
-                path = Path("/data/agent-files") / stored
-                if path.exists():
-                    path.unlink()
-            except Exception as e:
-                logger.warning(f"Failed to unlink shared file {stored}: {e}")
-
-        public_volume_name = db.get_public_volume_name(agent_name)
-        try:
-            public_volume = await volume_get(public_volume_name)
-            await volume_remove(public_volume)
-        except docker.errors.NotFound:
-            pass
-    except Exception as e:
-        logger.warning(f"Failed to delete public volume for agent {agent_name}: {e}")
-
-    # Delete agent tags (ORG-001)
-    try:
-        db.delete_agent_tags(agent_name)
-    except Exception as e:
-        logger.warning(f"Failed to delete tags for agent {agent_name}: {e}")
-
-    # Delete cached avatar, reference, and emotion images (AVATAR-001, AVATAR-002)
-    try:
-        for ext in (".webp", ".png"):
-            p = Path("/data/avatars") / f"{agent_name}{ext}"
-            if p.exists():
-                p.unlink()
-        ref = Path("/data/avatars") / f"{agent_name}_ref.png"
-        if ref.exists():
-            ref.unlink()
-        for emotion in AVATAR_EMOTIONS:
-            for ext in (".webp", ".png"):
-                p = Path("/data/avatars") / f"{agent_name}_emotion_{emotion}{ext}"
-                if p.exists():
-                    p.unlink()
-    except Exception as e:
-        logger.warning(f"Failed to delete avatar for agent {agent_name}: {e}")
-
+    # Mark the row as soft-deleted. Children stay until the retention
+    # sweep; the unique constraint on agent_name naturally blocks reuse
+    # during the retention window.
     db.delete_agent_ownership(agent_name)
 
     # SEC-001: audit delete after all cleanup and ownership removal committed.
@@ -725,6 +667,33 @@ async def force_release_agent(
 ):
     """Force release an agent from its running state. Owner-only."""
     return await force_release_agent_logic(agent_name, current_user)
+
+
+@router.post("/{agent_name}/circuit-breaker/reset")
+async def reset_circuit_breaker_endpoint(
+    agent_name: AuthorizedAgentByName,
+    current_user: User = Depends(require_role("admin")),
+):
+    """Force the agent's circuit breaker to closed (#921).
+
+    Admin only. Operator escape hatch for the dormant-CB cascade described
+    in #921 — equivalent to the manual `redis-cli DEL agent:circuit:{name}`
+    workaround. With the 1h auto-probe shipped in #921 this is rarely
+    needed (the breaker self-heals), but it stays as the first-response
+    tool when an operator already knows the agent is healthy and doesn't
+    want to wait a full cooldown.
+    """
+    from services.agent_client import CircuitState, reset_circuit
+    # Capture state-before for the response so postmortems can see what we
+    # reset out of. Racey against the DEL but fine — best-effort observability.
+    prior_state = CircuitState(agent_name).state
+    reset_circuit(agent_name)
+    return {
+        "agent_name": agent_name,
+        "prior_state": prior_state,
+        "new_state": "closed",
+        "reset_at": utc_now_iso(),
+    }
 
 
 # ============================================================================

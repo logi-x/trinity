@@ -118,12 +118,26 @@ async def get_public_feature_flags(
     - ``session_tab_enabled`` — gates the Session tab in AgentDetail.
       Reads through ``services.settings_service.is_session_tab_enabled()``
       so the resolution order (DB → env → False default) stays in one place.
+    - ``workspace_available`` — gates the Agent Workspace (voice + canvas).
+      Requires both voice infrastructure (VOICE_ENABLED + GEMINI_API_KEY) AND
+      ``WORKSPACE_ENABLED=true`` (or DB override). Defaults to False (#860).
 
     Auth required (any role) — these flags reveal nothing sensitive but we
     still keep them out of the unauthenticated surface.
     """
+    from config import GEMINI_API_KEY, VOICE_ENABLED
+    from services.entitlement_service import entitlement_service
+    voice_available = VOICE_ENABLED and bool(GEMINI_API_KEY)
     return {
         "session_tab_enabled": settings_service.is_session_tab_enabled(),
+        "voice_available": voice_available,
+        "workspace_available": voice_available and settings_service.is_workspace_enabled(),
+        "platform_default_model": settings_service.get_platform_default_model(),
+        # #847 Phase 0 — enterprise entitlements. Empty list means OSS
+        # build (or TRINITY_OSS_ONLY=1). UI uses this to hide
+        # enterprise-only tabs cleanly without server-side conditional
+        # rendering. Mirrors the deny-list pattern of the other flags.
+        "enterprise_features": entitlement_service.list_entitled_features(),
     }
 
 
@@ -1371,6 +1385,12 @@ async def update_setting(
 
     try:
         setting = db.set_setting(key, body.value)
+
+        # #831: Invalidate platform default model TTL cache on write
+        if key == "platform_default_model":
+            import services.settings_service as _ss
+            _ss._platform_model_cache = None
+            _ss._platform_model_cache_ts = 0.0
 
         # SEC-001: audit generic setting change
         await platform_audit_service.log(

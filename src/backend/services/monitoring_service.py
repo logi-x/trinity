@@ -11,6 +11,7 @@ Alerts are sent via the notification system when status changes.
 """
 
 import asyncio
+import logging
 import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any, Tuple
@@ -33,12 +34,76 @@ from db_models import (
 )
 from utils.helpers import utc_now_iso
 
+# Exception classification tuples are pure constants — no Redis / circular
+# risk — so they're safe at module-top. Only `CircuitState` (which touches
+# Redis) stays lazy below. Importing the tuples at module-top also keeps
+# them stable under test patches that replace `services.agent_client` with
+# a MagicMock, which would otherwise turn the names into mocks that fail
+# `except <not-an-exception>` at runtime.
+#
+# The ImportError fallback supports fixtures that stub services.agent_client
+# with just CircuitState (e.g. test_monitoring_dormant_skip.py) and don't
+# bother to populate these tuples. The literals here MUST track
+# agent_client.py — keep both lists in sync.
+try:
+    from services.agent_client import (
+        CIRCUIT_FAILURE_EXCEPTIONS,
+        TRANSIENT_TRANSPORT_EXCEPTIONS,
+    )
+except ImportError:
+    CIRCUIT_FAILURE_EXCEPTIONS = (httpx.ConnectError, httpx.ConnectTimeout)
+    TRANSIENT_TRANSPORT_EXCEPTIONS = (
+        httpx.TimeoutException,
+        httpx.WriteError,
+        httpx.ReadError,
+        httpx.RemoteProtocolError,
+    )
+
+logger = logging.getLogger(__name__)
+
 
 # =========================================================================
 # Configuration
 # =========================================================================
 
 DEFAULT_CONFIG = MonitoringConfig()
+
+
+def _is_circuit_dormant(agent_name: str) -> bool:
+    """Return True when the agent's circuit breaker is parked dormant (#631).
+
+    Imported lazily so a circular import (services.agent_client →
+    services.monitoring_service) can never form even if reachability ever
+    flips.
+    """
+    try:
+        from services.agent_client import CircuitState
+        return CircuitState(agent_name).state == "dormant"
+    except Exception:
+        # Treat any failure to read circuit state as 'not dormant' — the
+        # historical behaviour (probe + write) is the safe fallback when we
+        # can't tell. Worst case is we flood DB on a Redis blip; that's
+        # already what pre-#631 code did.
+        return False
+
+
+def _dormant_health_detail(agent_name: str) -> "AgentHealthDetail":
+    """Synthesise an AgentHealthDetail for a dormant agent without DB I/O."""
+    return AgentHealthDetail(
+        agent_name=agent_name,
+        aggregate_status="unhealthy",
+        last_check_at=utc_now_iso(),
+        docker=None,
+        network=None,
+        business=None,
+        issues=[
+            "Agent circuit dormant — too many consecutive failed probes. "
+            "Awaiting container restart or manual /api/monitoring/agents/{name}/check."
+        ],
+        recent_alerts=[],
+        uptime_percent_24h=None,
+        avg_latency_24h_ms=None,
+    )
 
 # Initialize Docker client
 try:
@@ -141,15 +206,54 @@ async def check_network_health(
     - HTTP reachability to agent's /health endpoint
     - Response time (latency)
     - HTTP status code
+
+    #631 — feeds the result into the per-agent circuit breaker so a dead
+    agent's repeated unreachability eventually trips dormant and stops the
+    health-check write flood.
+
+    #474 — failure classification largely mirrors AgentClient._request().
+    CIRCUIT_FAILURE_EXCEPTIONS (ConnectError, ConnectTimeout) count toward
+    the circuit; *Timeout / PoolTimeout do not. Any HTTP response (200..599)
+    records success — symmetric with _request() so stale failure counters
+    clear as soon as the agent proves reachable. A wedged-but-listening
+    agent (e.g. /health 5xx) is still flagged via aggregate_health()'s
+    status_code >= 500 check, not via the circuit.
+
+    #474 Layer 2 — /health-specific divergence from _request(): on this
+    endpoint, BrokenPipeError / ConnectionResetError (raw OSError —
+    uncaught in _request() per #798) and httpx.ReadError / WriteError /
+    RemoteProtocolError (transient and circuit-neutral in _request())
+    are reclassified. Raw pipe errors are client-side cancellations and
+    stay circuit-neutral; mid-stream httpx transport errors on this
+    small, fast endpoint are taken as agent liveness signals and DO
+    record_failure(). See the explicit handlers below.
     """
     now = utc_now_iso()
     url = f"http://agent-{agent_name}:8000/health"
+
+    # `CircuitState` stays lazy — it touches Redis on construction and
+    # could plausibly grow a backwards dependency on this module later.
+    # The exception tuples it shares with us are imported at module-top
+    # (constants, no circular risk).
+    try:
+        from services.agent_client import CircuitState
+        circuit = CircuitState(agent_name)
+    except Exception:
+        circuit = None
 
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(url)
             latency_ms = (time.monotonic() - start) * 1000
+
+            # Any httpx.Response (status_code in 100..599) proves TCP/HTTP
+            # reachability, so the circuit records success unconditionally —
+            # symmetric with AgentClient._request() at line ~642. 5xx is
+            # NOT a circuit signal; aggregate_health() below flags it as
+            # UNHEALTHY using the explicit status_code >= 500 check.
+            if circuit is not None:
+                circuit.record_success()
 
             return NetworkHealthCheck(
                 agent_name=agent_name,
@@ -158,25 +262,123 @@ async def check_network_health(
                 latency_ms=round(latency_ms, 2),
                 checked_at=now
             )
-    except httpx.TimeoutException:
-        return NetworkHealthCheck(
-            agent_name=agent_name,
-            reachable=False,
-            error="HTTP timeout",
-            checked_at=now
+
+    except asyncio.CancelledError:
+        # Don't swallow cancellation during shutdown.
+        raise
+
+    except CIRCUIT_FAILURE_EXCEPTIONS as e:
+        # Real unreachability — TCP refused or connect handshake timed out.
+        # User-facing string is stable ("Connection refused") so dashboards
+        # don't change on httpx version bumps and exception messages don't
+        # leak into UI; full classname+message stays in logs for triage.
+        logger.debug(
+            "check_network_health(%s) circuit failure %s: %s",
+            agent_name, type(e).__name__, e,
         )
-    except httpx.ConnectError:
+        if circuit is not None:
+            circuit.record_failure()
         return NetworkHealthCheck(
             agent_name=agent_name,
             reachable=False,
             error="Connection refused",
             checked_at=now
         )
-    except Exception as e:
+
+    except (BrokenPipeError, ConnectionResetError) as e:
+        # Client-side transport drop — agent isn't sick, the connection died
+        # mid-flight (likely an upstream MCP-sync client cancellation that
+        # cascaded into the pooled keepalive socket). Do NOT record_failure
+        # — the agent's health hasn't been observed. (#474 Layer 2.)
+        #
+        # Layered ABOVE TRANSIENT_TRANSPORT_EXCEPTIONS because the shared
+        # tuple from agent_client.py does not include the raw OSError
+        # subclasses — #798 leaves those uncaught in _request() so they
+        # surface as client bugs, but on a /health probe we'd rather
+        # observe the drop and report `reachable=False` than raise.
         return NetworkHealthCheck(
             agent_name=agent_name,
             reachable=False,
-            error=str(e)[:200],
+            error=f"Connection dropped: {type(e).__name__}",
+            checked_at=now
+        )
+
+    except (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError) as e:
+        # On a /health probe these ARE liveness signals: if the agent
+        # partially writes then drops (event-loop wedge, OOM mid-write,
+        # segfault), the agent IS unhealthy. Distinct from a client-side
+        # BrokenPipeError above. (#474 Phase 3 Eng finding #3.)
+        #
+        # /health-specific OVERRIDE of TRANSIENT_TRANSPORT_EXCEPTIONS
+        # below: in AgentClient._request() these same exceptions on
+        # arbitrary /api/* paths stay circuit-neutral (#798) because a
+        # mid-stream drop there could be benign (client cancel, busy
+        # agent, network blip). On the dedicated /health endpoint the
+        # response is supposed to be small and immediate, so a partial
+        # response is genuinely "agent crashed mid-write" — circuit
+        # signal applies. Must be layered ABOVE TRANSIENT_TRANSPORT_EXCEPTIONS
+        # so Python's first-match wins.
+        if circuit is not None:
+            circuit.record_failure()
+        return NetworkHealthCheck(
+            agent_name=agent_name,
+            reachable=False,
+            error=f"HTTP transport error on /health: {type(e).__name__}",
+            checked_at=now
+        )
+
+    except httpx.TimeoutException as e:
+        # /health is supposed to be a small, fast endpoint that responds
+        # immediately. A timeout here is a liveness signal — the agent is
+        # wedged (event-loop blocked, GIL contention, runaway compute) —
+        # so record_failure() applies even though in AgentClient._request()
+        # the same exception is circuit-neutral.
+        #
+        # /health-specific OVERRIDE of TRANSIENT_TRANSPORT_EXCEPTIONS
+        # below (TimeoutException is the tuple's parent class). Layered
+        # ABOVE so the timeout subset gets the liveness contract instead
+        # of the transient one. Note: ConnectTimeout is intercepted by
+        # CIRCUIT_FAILURE_EXCEPTIONS above (first-match wins) and never
+        # reaches here.
+        logger.debug(
+            "check_network_health(%s) timeout %s: %s",
+            agent_name, type(e).__name__, e,
+        )
+        if circuit is not None:
+            circuit.record_failure()
+        return NetworkHealthCheck(
+            agent_name=agent_name,
+            reachable=False,
+            error="HTTP timeout",
+            checked_at=now
+        )
+
+    except TRANSIENT_TRANSPORT_EXCEPTIONS as e:
+        # Garbled HTTP framing or other transient transport hiccup. NOT a
+        # circuit signal. The ReadError/WriteError/RemoteProtocolError and
+        # TimeoutException entries of this tuple are no longer reachable
+        # from here — the /health-specific handlers above intercept them
+        # with the opposite contract. Kept as a defensive default for any
+        # future member added to the shared tuple.
+        return NetworkHealthCheck(
+            agent_name=agent_name,
+            reachable=False,
+            error=f"{type(e).__name__}: {e}"[:200],
+            checked_at=now
+        )
+
+    except Exception as e:
+        # Unexpected — log with traceback. Unknown errors are almost always
+        # our bug, not evidence of agent unhealth, so DO NOT trip the
+        # circuit here.
+        logger.exception(
+            "check_network_health(%s) unexpected %s",
+            agent_name, type(e).__name__,
+        )
+        return NetworkHealthCheck(
+            agent_name=agent_name,
+            reachable=False,
+            error=f"{type(e).__name__}: {e}"[:200],
             checked_at=now
         )
 
@@ -312,6 +514,14 @@ def aggregate_health(
         issues.append(f"Network unreachable: {network.error or 'unknown'}")
         return AgentHealthStatus.UNHEALTHY, issues
 
+    # /health returned but with a server-error status — agent is reachable
+    # but its HTTP layer is broken. Mark UNHEALTHY (#474 eng review). Without
+    # this, the new "any HTTP response = reachable" rule would silently rate
+    # a wedged-but-listening agent as HEALTHY.
+    if network.status_code is not None and network.status_code >= 500:
+        issues.append(f"Network /health returned {network.status_code}")
+        return AgentHealthStatus.UNHEALTHY, issues
+
     if business.runtime_available is False:
         issues.append("Runtime not available")
         return AgentHealthStatus.UNHEALTHY, issues
@@ -369,9 +579,22 @@ async def perform_health_check(
     Runs all three health check layers and aggregates results.
     Optionally stores results in the database.
 
+    #631 — short-circuit when the agent's circuit breaker is dormant. Once we
+    enter dormant we already know the HTTP server is hard-down (~40min of
+    failed probes). Continuing to run network + business probes wastes CPU
+    and — more importantly — every cycle wrote 4 health_check rows; with two
+    uvicorn workers polling concurrently this was the SQLite-contention
+    source flagged in the bug report. Bail fast with a synthetic detail and
+    no DB writes; recovery resumes when the circuit exits dormant
+    (container restart, manual /api/monitoring/agents/{name}/check, or
+    autonomy re-enabled).
+
     Returns:
         AgentHealthDetail with all check results
     """
+    if _is_circuit_dormant(agent_name):
+        return _dormant_health_detail(agent_name)
+
     # Run Docker check in thread pool (blocking)
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -654,21 +877,62 @@ class MonitoringService:
             await asyncio.sleep(self.config.docker_check_interval)
 
     async def _run_check_cycle(self):
-        """Run one cycle of health checks for all agents."""
+        """Run one cycle of health checks for every Trinity agent.
+
+        #675: this previously filtered to ``status == "running"`` only.
+        A stopped / exited / crashed agent was excluded from every
+        cycle, so its ``agent_health_checks`` row never refreshed —
+        production showed agents stale for *months* (last refresh
+        2026-02-23..04-28) while the one running agent stayed fresh.
+        That is precisely backwards: a down agent is the case
+        monitoring most needs to surface. `perform_health_check`
+        already produces a correct "docker exited / unreachable →
+        unhealthy" record for a stopped agent (and the #631 dormant
+        short-circuit bounds cost for hard-down agents), so we now
+        check the whole fleet.
+
+        Note: `perform_fleet_health_check` is already per-agent
+        isolated via `asyncio.gather(..., return_exceptions=True)` +
+        per-result handling — issue hypothesis #1 (one agent's failure
+        short-circuits the fleet) did not hold; the bug was this
+        filter, not missing isolation.
+        """
         from services.docker_service import list_all_agents_fast
 
-        # Get list of running agents
+        # `list_all_agents_fast()` already passes `all=True`, so this
+        # includes stopped/exited/dead/created containers (normalised
+        # to status="stopped"). Check all of them.
         agents = list_all_agents_fast()
-        running_agents = [a.name for a in agents if a.status == "running"]
+        all_agent_names = [a.name for a in agents]
 
-        if not running_agents:
+        if not all_agent_names:
             return
 
+        running_count = sum(1 for a in agents if a.status == "running")
+        stopped_count = len(all_agent_names) - running_count
+        cycle_start = time.monotonic()
+
         # Perform health checks
-        await perform_fleet_health_check(
-            running_agents,
+        fleet = await perform_fleet_health_check(
+            all_agent_names,
             self.config,
             store_results=True
+        )
+
+        # #675 ask: one structured line per pass so a stalled / partial
+        # fleet check is observable next time instead of being inferred
+        # months later from stale rollups. Includes the agent count,
+        # running/stopped split, the aggregate-status breakdown, and
+        # wall-clock duration.
+        s = fleet.summary
+        logger.info(
+            "fleet_health_check pass complete: "
+            "agents=%d (running=%d stopped=%d) "
+            "healthy=%d degraded=%d unhealthy=%d critical=%d unknown=%d "
+            "duration_ms=%d",
+            len(all_agent_names), running_count, stopped_count,
+            s.healthy, s.degraded, s.unhealthy, s.critical, s.unknown,
+            int((time.monotonic() - cycle_start) * 1000),
         )
 
         # Cleanup old records periodically (every hour)

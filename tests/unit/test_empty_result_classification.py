@@ -13,7 +13,7 @@ Sibling of #516 / ``_classify_signal_exit`` — that one handles
 == 0`` lost-result-line shape.
 
 Module under test:
-    docker/base-image/agent_server/services/claude_code.py::_classify_empty_result
+    docker/base-image/agent_server/services/error_classifier.py::_classify_empty_result
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ if "agent_server" not in sys.modules:
     sys.modules["agent_server"] = _stub
 
 from agent_server.models import ExecutionMetadata  # noqa: E402
-from agent_server.services.claude_code import _classify_empty_result  # noqa: E402
+from agent_server.services.error_classifier import _classify_empty_result  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +52,12 @@ def test_both_cost_and_duration_none_returns_502():
 
     assert result is not None
     status_code, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
     assert status_code == 502
     # Diagnostic context surfaces what was captured before the result line
     # was lost — operators can correlate with agent-server logs.
@@ -72,6 +78,12 @@ def test_metadata_with_no_turns_renders_zero():
 
     assert result is not None
     _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
     assert "3 tool calls" in detail
     assert "0 turns" in detail
 
@@ -86,6 +98,12 @@ def test_zero_tool_count_renders_explicitly():
 
     assert result is not None
     status_code, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
     assert status_code == 502
     assert "0 tool calls" in detail
     assert "raw_messages=0" in detail
@@ -183,6 +201,12 @@ def test_raw_messages_fallback_derives_num_turns():
 
     assert result is not None
     _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
     assert "5 tool calls" in detail  # from metadata (accumulated during parsing)
     assert "3 turns" in detail       # 3 assistant messages counted from raw_messages
 
@@ -201,6 +225,12 @@ def test_raw_messages_fallback_not_used_when_num_turns_present():
 
     assert result is not None
     _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
     assert "7 tool calls" in detail   # uses metadata tool_count
     assert "10 turns" in detail       # uses metadata num_turns (not raw count 3)
 
@@ -213,6 +243,12 @@ def test_raw_messages_empty_falls_back_to_zero():
 
     assert result is not None
     _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
     assert "0 tool calls" in detail
     assert "0 turns" in detail
 
@@ -225,6 +261,12 @@ def test_raw_messages_none_falls_back_to_zero():
 
     assert result is not None
     _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
     assert "0 tool calls" in detail
 
 
@@ -237,3 +279,139 @@ def test_none_metadata_returns_none():
     None and let the caller handle it via the existing empty-response 500
     path. The classifier should never crash on bad input."""
     assert _classify_empty_result(None, raw_message_count=0) is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #640: parse-failure context surfaces in the 502 detail.
+# ---------------------------------------------------------------------------
+
+def test_parse_failure_count_surfaces_in_detail():
+    """When the stdout reader saw lines that ``json.loads`` rejected, the
+    detail must include the count so operators can distinguish "wire was
+    corrupted" (parse_failures > 0 — likely #640 interleaving) from "reader
+    leaked past claude exit" (parse_failures == 0, the original #520/#618
+    shape). Without this signal, both failure modes look identical in
+    production logs."""
+    metadata = ExecutionMetadata(tool_count=4, num_turns=8)
+
+    result = _classify_empty_result(
+        metadata,
+        raw_message_count=15,
+        parse_failure_count=3,
+    )
+
+    assert result is not None
+    _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
+    assert "parse_failures=3" in detail
+
+
+def test_parse_failure_sample_appended_when_present():
+    """The first malformed line (sanitized + length-capped by the reader) is
+    appended to the detail so operators can identify the truncation pattern
+    — e.g. ``{"type":"user", ... "tool_use_id":"toolu_…","`` is the canonical
+    #630 fingerprint and points at a specific failure shape."""
+    metadata = ExecutionMetadata(tool_count=4, num_turns=8)
+    sample = '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_abc","'
+
+    result = _classify_empty_result(
+        metadata,
+        raw_message_count=15,
+        parse_failure_count=1,
+        parse_failure_sample=sample,
+    )
+
+    assert result is not None
+    _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
+    assert "First malformed stdout line:" in detail
+    assert "tool_use_id" in detail
+
+
+def test_parse_failure_sample_omitted_when_count_is_zero():
+    """If the reader saw no parse failures, no sample fragment should appear
+    even if a stale sample is somehow passed in. parse_failures=0 in the
+    detail is itself useful — confirms the wire was clean and the result
+    line was lost downstream (reader leak)."""
+    metadata = ExecutionMetadata(tool_count=4, num_turns=8)
+
+    result = _classify_empty_result(
+        metadata,
+        raw_message_count=15,
+        parse_failure_count=0,
+        parse_failure_sample="should-not-appear",
+    )
+
+    assert result is not None
+    _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
+    assert "parse_failures=0" in detail
+    assert "should-not-appear" not in detail
+    assert "First malformed stdout line:" not in detail
+
+
+def test_raw_messages_type_summary_in_detail():
+    """The raw-message type histogram (capped to top 6 types) lets operators
+    see the shape of what was captured before the result line was lost.
+    Distinguishes "got most of the stream, lost only the trailing result"
+    from "stopped near the start" — different infrastructure failures."""
+    metadata = ExecutionMetadata(tool_count=2, num_turns=5)
+    raw = (
+        [{"type": "system"}]
+        + [{"type": "assistant"} for _ in range(5)]
+        + [{"type": "user"} for _ in range(2)]
+    )
+
+    result = _classify_empty_result(
+        metadata,
+        raw_message_count=len(raw),
+        raw_messages=raw,
+    )
+
+    assert result is not None
+    _, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
+    assert "types=" in detail
+    assert "assistant=5" in detail
+    assert "user=2" in detail
+
+
+def test_default_parse_failure_args_preserve_legacy_callers():
+    """Old callers that pass only metadata + raw_message_count must keep
+    working unchanged: parse_failure_count defaults to 0, sample to None,
+    detail still renders. Backward compatibility for the chat path that
+    doesn't yet wire parse-failure tracking through the classifier."""
+    metadata = ExecutionMetadata(tool_count=7, num_turns=12)
+
+    result = _classify_empty_result(metadata, raw_message_count=22)
+
+    assert result is not None
+    status_code, detail = result
+
+    assert isinstance(detail, dict), '#678: _classify_empty_result returns dict body'
+
+    body = detail
+
+    detail = body['message']
+    assert status_code == 502
+    assert "parse_failures=0" in detail

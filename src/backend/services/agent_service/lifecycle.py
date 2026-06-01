@@ -27,7 +27,7 @@ from services.settings_service import get_anthropic_api_key, get_github_pat, get
 from services.skill_service import skill_service
 from .helpers import check_shared_folder_mounts_match, check_api_key_env_matches, check_github_pat_env_matches, check_resource_limits_match, check_full_capabilities_match, check_guardrails_env_matches
 from .file_sharing import check_public_folder_mount_matches
-from .read_only import inject_read_only_hooks
+from .read_only import inject_read_only_hooks, remove_read_only_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -85,41 +85,16 @@ async def wait_for_agent_ready(
 
 
 # =============================================================================
-# Container Security Capability Sets
+# Container Security Capability Sets — see capabilities.py for definitions
 # =============================================================================
-# These define the Linux capabilities granted to agent containers.
-# Security principle: Always drop ALL caps, then add back only what's needed.
-
-# Restricted mode capabilities - minimum for agent operation (default)
-RESTRICTED_CAPABILITIES = [
-    'NET_BIND_SERVICE',  # Bind to ports < 1024
-    'SETGID', 'SETUID',  # Change user/group (for su/sudo)
-    'CHOWN',             # Change file ownership
-    'SYS_CHROOT',        # Use chroot
-    'AUDIT_WRITE',       # Write to audit log
-]
-
-# Full capabilities mode - adds package installation support
-# Used when agents need apt-get, pip install, etc.
-FULL_CAPABILITIES = RESTRICTED_CAPABILITIES + [
-    'DAC_OVERRIDE',      # Bypass file permission checks (needed for apt)
-    'FOWNER',            # Bypass permission checks on file owner
-    'FSETID',            # Don't clear setuid/setgid bits
-    'KILL',              # Send signals to processes
-    'MKNOD',             # Create special files
-    'NET_RAW',           # Use raw sockets (ping, etc.)
-    'SYS_PTRACE',        # Trace processes (debugging)
-]
-
-# These capabilities are NEVER granted - they pose significant security risks
-# Listed for documentation; we achieve this by always using cap_drop=['ALL']
-PROHIBITED_CAPABILITIES = [
-    'SYS_ADMIN',         # Mount filesystems, configure namespace - too powerful
-    'NET_ADMIN',         # Network administration - could escape container
-    'SYS_RAWIO',         # Raw I/O access - direct hardware access
-    'SYS_MODULE',        # Load kernel modules - kernel compromise
-    'SYS_BOOT',          # Reboot system
-]
+# Re-exported from .capabilities so that test code (and other callers
+# that only need the constants) can import them without dragging the
+# docker / fastapi / database transitive imports of this module.
+from .capabilities import (  # noqa: F401
+    RESTRICTED_CAPABILITIES,
+    FULL_CAPABILITIES,
+    PROHIBITED_CAPABILITIES,
+)
 
 
 async def inject_assigned_credentials(agent_name: str, max_retries: int = 3, retry_delay: float = 2.0) -> dict:
@@ -139,7 +114,30 @@ async def inject_assigned_credentials(agent_name: str, max_retries: int = 3, ret
         dict with injection status
     """
     import asyncio
-    from services.credential_encryption import get_credential_encryption_service
+    from database import db
+    from services.credential_encryption import (
+        CredentialsFileNotFoundError,
+        get_credential_encryption_service,
+    )
+
+    # #612: subscription-mode agents authenticate via CLAUDE_CODE_OAUTH_TOKEN
+    # env var set at container creation (SUB-002). They do not need (and
+    # typically do not have) a .credentials.enc file. Attempting the import
+    # would either silently succeed-noop or surface a misleading "failed"
+    # status that prompts operators to take corrective action (re-assigning
+    # the subscription, recreating the container) — when nothing is wrong.
+    # Short-circuit to a clear skipped status before the import path runs.
+    if db.get_agent_subscription_id(agent_name):
+        logger.debug(
+            f"Skipping .credentials.enc import for {agent_name}: "
+            f"subscription mode (auth via CLAUDE_CODE_OAUTH_TOKEN env var)"
+        )
+        return {
+            "status": "skipped",
+            "reason": "subscription_mode",
+            "detail": "agent authenticates via CLAUDE_CODE_OAUTH_TOKEN; "
+                      "file-based credential injection is not used",
+        }
 
     try:
         encryption_service = get_credential_encryption_service()
@@ -163,11 +161,20 @@ async def inject_assigned_credentials(agent_name: str, max_retries: int = 3, ret
             else:
                 return {"status": "skipped", "reason": "no_credentials_enc_file"}
 
+        except CredentialsFileNotFoundError:
+            # #612: ``.credentials.enc`` is absent. Common case for fresh
+            # agents that haven't been through an export cycle yet — a clean
+            # skip, not a failure. (Was previously caught by a fragile
+            # substring match against the error message; the explicit
+            # subclass makes the intent unambiguous.)
+            logger.debug(f"No .credentials.enc found for agent {agent_name}")
+            return {"status": "skipped", "reason": "no_credentials_enc_file"}
+
         except ValueError as e:
-            # .credentials.enc doesn't exist - this is normal for new agents
-            if "not found" in str(e).lower():
-                logger.debug(f"No .credentials.enc found for agent {agent_name}")
-                return {"status": "skipped", "reason": "no_credentials_enc_file"}
+            # Other ValueError shapes (encrypted blob malformed, decrypt
+            # failure, …) — keep retrying because some of them are
+            # transient (e.g. agent HTTP not yet ready under multi-agent
+            # cold start, #406).
             last_error = str(e)
 
         except Exception as e:
@@ -300,19 +307,20 @@ async def start_agent_internal(agent_name: str) -> dict:
         skills_result = await inject_assigned_skills(agent_name)
         skills_status = skills_result.get("status", "unknown")
 
-    # Inject read-only hooks if enabled
-    read_only_result = {"status": "skipped", "reason": "not_enabled"}
+    # Sync read-only config file on every start so the baked-in guard always
+    # reflects the current DB state — prevents stale enabled:true config from
+    # persisting on the volume after the user disables read-only mode (#887).
+    read_only_result = {"status": "skipped", "reason": "unknown"}
     read_only_data = db.get_read_only_mode(agent_name)
-    if read_only_data.get("enabled"):
-        try:
-            read_only_result = await inject_read_only_hooks(agent_name, read_only_data.get("config"))
-            if read_only_result.get("success"):
-                read_only_result["status"] = "success"
-            else:
-                read_only_result["status"] = "failed"
-        except Exception as e:
-            logger.warning(f"Failed to inject read-only hooks into agent {agent_name}: {e}")
-            read_only_result = {"status": "failed", "error": str(e)}
+    try:
+        if read_only_data.get("enabled"):
+            result = await inject_read_only_hooks(agent_name, read_only_data.get("config"))
+        else:
+            result = await remove_read_only_hooks(agent_name)
+        read_only_result = {"status": "success" if result.get("success") else "failed", **result}
+    except Exception as e:
+        logger.warning(f"Failed to sync read-only config for agent {agent_name}: {e}")
+        read_only_result = {"status": "failed", "error": str(e)}
 
     return {
         "message": f"Agent {agent_name} started",
@@ -365,9 +373,10 @@ async def recreate_container_with_updated_config(agent_name: str, old_container,
         env_vars.pop('ANTHROPIC_API_KEY', None)
         env_vars.pop('CLAUDE_CODE_OAUTH_TOKEN', None)
 
-    # Update GITHUB_PAT if the container has one and a current system PAT exists
+    # Update GITHUB_PAT using per-agent PAT first, then platform PAT
     if env_vars.get('GITHUB_PAT'):
-        current_pat = get_github_pat()
+        from routers.git import get_github_pat_for_agent
+        current_pat = get_github_pat_for_agent(agent_name)
         if current_pat:
             env_vars['GITHUB_PAT'] = current_pat
 

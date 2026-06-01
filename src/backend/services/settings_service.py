@@ -12,8 +12,16 @@ routers.settings re-exports these functions for backward compatibility.
 """
 import json
 import os
+import time
 from typing import List, Optional
 from database import db
+
+# Platform default model (#831)
+PLATFORM_DEFAULT_MODEL_KEY = "platform_default_model"
+PLATFORM_DEFAULT_MODEL_VALUE = "claude-sonnet-4-6"
+_platform_model_cache: Optional[str] = None
+_platform_model_cache_ts: float = 0.0
+_PLATFORM_MODEL_CACHE_TTL = 60.0
 
 
 # ============================================================================
@@ -31,6 +39,24 @@ OPS_SETTINGS_DEFAULTS = {
     "ops_log_retention_days": "7",  # Days to keep container logs
     "ops_health_check_interval": "60",  # Seconds between health checks
     "ssh_access_enabled": "false",  # Enable SSH access via MCP tool
+    # Issue #772: retention policy for execution_log + agent_health_checks.
+    # "0" disables that prune step.
+    "execution_log_retention_days": "30",  # Null `execution_log` TEXT after N days
+    "execution_row_retention_days": "90",  # DELETE schedule_executions rows after N days
+    "health_check_retention_days": "7",   # DELETE agent_health_checks rows after N days
+    # Issue #834 Phase 1a: soft-delete retention for agents. After
+    # DELETE /api/agents/{name}, the agent_ownership row is marked
+    # `deleted_at = NOW` and child rows are preserved. The cleanup
+    # sweep hard-deletes rows older than this many days (cascading
+    # child tables via #816's purge primitive). "0" disables the
+    # sweep entirely — soft-deleted rows then persist until manually
+    # purged.
+    "agent_soft_delete_retention_days": "180",
+    # Issue #834 Phase 1b: per-schedule soft-delete. Schedules are
+    # higher-churn than agents (users tweak/replace cron expressions
+    # often), so default is shorter than the agent window. "0"
+    # disables the sweep.
+    "schedule_soft_delete_retention_days": "30",
 }
 
 # Descriptions for each ops setting
@@ -44,6 +70,11 @@ OPS_SETTINGS_DESCRIPTIONS = {
     "ops_log_retention_days": "Number of days to retain container logs (default: 7)",
     "ops_health_check_interval": "Seconds between automated health checks (default: 60)",
     "ssh_access_enabled": "Enable ephemeral SSH access to agent containers via MCP tool (default: false)",
+    "execution_log_retention_days": "Days to retain the JSONL transcript on schedule_executions (default: 30, 0 = disabled, #772)",
+    "execution_row_retention_days": "Days to retain finished schedule_execution rows; rows older than this are deleted (default: 90, 0 = disabled, #772)",
+    "health_check_retention_days": "Days to retain agent_health_checks rows (default: 7, 0 = disabled, #772)",
+    "agent_soft_delete_retention_days": "Days to retain soft-deleted agents before hard-purge (default: 180, 0 = disabled, #834)",
+    "schedule_soft_delete_retention_days": "Days to retain soft-deleted schedules before hard-purge (default: 30, 0 = disabled, #834)",
 }
 
 
@@ -157,6 +188,33 @@ class SettingsService:
         return True
 
     # =========================================================================
+    # Workspace feature flag (#860)
+    # =========================================================================
+
+    def is_workspace_enabled(self) -> bool:
+        """
+        Whether the Agent Workspace (voice + canvas) surface is exposed to users.
+
+        Resolves in this order:
+        1. system_settings row 'workspace_enabled' ("true"/"false")
+        2. WORKSPACE_ENABLED env var (only honored as "true"/"1"/"yes" to opt in)
+        3. Default: False (BETA — opt-in required)
+
+        Admins opt in by setting ``workspace_enabled=true`` in system_settings
+        or by exporting ``WORKSPACE_ENABLED=true``.
+
+        Note: workspace also requires voice to be available (VOICE_ENABLED +
+        GEMINI_API_KEY). The feature-flags endpoint combines both conditions.
+        """
+        stored = self.get_setting('workspace_enabled')
+        if stored is not None:
+            return str(stored).lower() in ("true", "1", "yes")
+        env_val = os.getenv('WORKSPACE_ENABLED', '').strip().lower()
+        if env_val in ("true", "1", "yes"):
+            return True
+        return False
+
+    # =========================================================================
     # GitHub Templates (TMPL-001)
     # =========================================================================
 
@@ -186,6 +244,22 @@ class SettingsService:
     def delete_github_templates(self) -> bool:
         """Delete GitHub templates configuration (revert to defaults)."""
         return db.delete_setting('github_templates')
+
+    def get_platform_default_model(self) -> str:
+        """
+        Return the platform-wide default Claude model (#831).
+
+        Resolution: system_settings.platform_default_model → PLATFORM_DEFAULT_MODEL_VALUE.
+        Result is cached for 60 s to avoid per-turn SQLite reads during burst drain.
+        """
+        global _platform_model_cache, _platform_model_cache_ts
+        now = time.monotonic()
+        if _platform_model_cache is not None and (now - _platform_model_cache_ts) < _PLATFORM_MODEL_CACHE_TTL:
+            return _platform_model_cache
+        value = self.get_setting(PLATFORM_DEFAULT_MODEL_KEY, PLATFORM_DEFAULT_MODEL_VALUE)
+        _platform_model_cache = value or PLATFORM_DEFAULT_MODEL_VALUE
+        _platform_model_cache_ts = now
+        return _platform_model_cache
 
     def get_ops_setting(self, key: str, as_type: type = str):
         """
@@ -377,3 +451,8 @@ def get_agent_default_resources() -> dict:
 def get_github_templates() -> Optional[List[dict]]:
     """Get admin-configured GitHub templates, or None for defaults."""
     return settings_service.get_github_templates()
+
+
+def get_platform_default_model() -> str:
+    """Return the platform-wide default Claude model (#831)."""
+    return settings_service.get_platform_default_model()

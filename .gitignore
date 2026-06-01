@@ -35,6 +35,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# uv lockfile (repo uses pyproject.toml for pytest only; empty lockfile is noise)
+uv.lock
+
 # Node
 node_modules/
 npm-debug.log*
@@ -130,6 +133,7 @@ tests/reports/coverage/
 
 # Test agent templates (created during automated tests)
 src/backend/config/agent-templates/test-*/
+src/backend/config/agent-templates/quota-*/
 
 # Agent template runtime artifacts (generated during execution)
 config/agent-templates/**/memory/
