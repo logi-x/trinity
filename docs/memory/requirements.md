@@ -572,6 +572,23 @@ Trinity is autonomous agent orchestration and infrastructure — sovereign infra
   - Audit event `idempotent_replay` on every replay (duplicate-storms observable); 24h TTL purge folded into the cleanup-service retention sweep.
 - **Architectural Invariant**: #18 — every new trigger type must accept an `Idempotency-Key` before merge.
 
+### 10.11 Dispatch Circuit Breaker (RELIABILITY-007)
+- **Status**: ✅ Implemented (2026-05-30); default-OFF opt-in canary
+- **Requirement ID**: RELIABILITY-007
+- **GitHub Issue**: #526
+- **Description**: Per-agent **producer-side** circuit breaker at the dispatch layer. When an agent is *auth-dead* (reachable but answering HTTP 503 → execution `error_code == AUTH`), the breaker fast-fails NEW executions with HTTP 503 instead of poisoning the persistent backlog with doomed tasks, fails the doomed backlog immediately, and self-heals via a half-open probe. Distinct from and namespace-isolated from the transport-reachability breaker (#631) — the two never contaminate each other's counter.
+- **Key Features**:
+  - New `services/dispatch_breaker.py` — consecutive-failure state machine (`closed → open → half-open(probe) → closed`) in Redis `agent:dispatch:{name}` via atomic Lua (threshold 3, base cooldown 30s → 300s exponential backoff, one-probe-at-a-time `SET NX EX` lock); fail-open on Redis down, never raises
+  - **AUTH-only counting** (D10): TIMEOUT / AGENT_ERROR never count, to avoid false trips on long/bad-prompt tasks
+  - **No-enqueue invariant** (D2 + F1): `CapacityManager.acquire(breaker_enabled=…)` raises `CircuitOpen` *before* the overflow branch; a half-open probe is admitted only into a free slot (never enqueued) so the invariant spans the half-open window
+  - Drain-on-trip: `task_execution_service` records outcomes at the terminals and on `→open` backgrounds `db.fail_queued_for_agent` (QUEUED→FAILED) + clear in-memory queue + audit; 60s `run_maintenance` breaker-aware backstop re-fails still-open-breaker backlog if an inline drain is lost (~60s worst case, not 24h)
+  - Shared Redis plumbing extracted to top-level `redis_breaker_util.py` (fail-open client, Lua `ScriptCache`, decode helpers) reused by both breakers
+  - Per-agent `agent_ownership.circuit_breaker_enabled` opt-in column (default OFF) + global `DISPATCH_BREAKER_ENABLED` env master switch — both must be on to engage
+  - Operator API: `GET/PUT /api/agents/{name}/circuit-breaker` (read = authorized, config = owner-only + audit); `reset` (admin) clears BOTH breakers; unified block embedded in `GET /api/agents/{name}` and agent-health detail; `circuit_breakers` field on `/api/agents/slots` (pipelined HGETALL, no SCAN)
+  - Frontend: distinct ⚡ "circuit open" danger badge in `AgentHeader` (detail page) and `AgentNode` (dashboard graph)
+  - Exposes `record_failure("missed_heartbeat")` as the #307 heartbeat seam
+- **Flow**: `docs/memory/feature-flows/dispatch-circuit-breaker.md`, `docs/memory/feature-flows/capacity-management.md`, `docs/memory/feature-flows/task-execution-service.md`
+
 ---
 
 ## 11. GitHub Integration
