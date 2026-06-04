@@ -11,7 +11,7 @@ import logging
 import asyncio
 import uuid
 from datetime import datetime
-from typing import NoReturn, Optional
+from typing import NamedTuple, NoReturn, Optional
 
 from models import User, ChatMessageRequest, ModelChangeRequest, ParallelTaskRequest, ActivityType, ActivityState, TaskExecutionStatus, ExecutionSource
 from dependencies import get_current_user, get_authorized_agent, get_owned_agent
@@ -106,47 +106,48 @@ async def broadcast_collaboration_event(source_agent: str, target_agent: str, ac
         print(f"[Warning] WebSocket manager not set, skipping collaboration broadcast")
 
 
-@router.post("/{name}/chat")
-async def chat_with_agent(
+class ChatAdmission(NamedTuple):
+    """Result of the chat admission gate (#1026 slice 1) when a request is
+    cleared to proceed. Carries the values the rest of the endpoint needs."""
+    idem: object
+    execution_id: str
+    capacity_result: object
+    capacity: object
+    queue_result: str
+    chat_timeout: int
+
+
+async def _admit_chat_request(
+    *,
+    name: str,
     request: ChatMessageRequest,
-    name: str = Depends(get_authorized_agent),
-    current_user: User = Depends(get_current_user),
-    x_source_agent: Optional[str] = Header(None),
-    x_via_mcp: Optional[str] = Header(None),
-    x_mcp_key_id: Optional[str] = Header(None),
-    x_mcp_key_name: Optional[str] = Header(None),
-    idempotency_key: Optional[str] = Header(None),
+    current_user: User,
+    x_source_agent: Optional[str],
+    x_via_mcp: Optional[str],
+    x_mcp_key_id: Optional[str],
+    x_mcp_key_name: Optional[str],
+    idempotency_key: Optional[str],
 ):
+    """Admission gate for chat_with_agent (#1026 slice 1).
+
+    Runs the idempotency gate (#525), the dispatch-breaker fast-fail (#526), and
+    the CapacityManager.acquire (#428). Returns either:
+      - a ``JSONResponse`` — the caller must return it directly (idempotent
+        replay snapshot); or
+      - a ``ChatAdmission`` — the request is cleared and carries the
+        ``idem`` / ``execution_id`` / ``capacity_result`` / ``capacity`` the
+        rest of the endpoint consumes.
+
+    Raises ``HTTPException`` directly on the deny paths (409 in-flight replay,
+    503 breaker-open, 429 capacity-full — which also releases the idempotency
+    claim so the caller can retry).
     """
-    Proxy chat messages to agent's internal web server and persist to database.
-
-    This endpoint enforces single-execution-at-a-time via the execution queue.
-    If the agent is busy, the request is queued (up to 3 waiting).
-    If the queue is full, returns 429 Too Many Requests.
-
-    Issue #98: Chat executions now also acquire a capacity slot so that
-    SlotService is the single source of truth for agent load. The queue
-    still enforces serial chat; the slot tracks resource usage visible
-    in the capacity meter.
-
-    Headers:
-    - X-Source-Agent: Set when one agent calls another (agent-to-agent)
-    - X-Via-MCP: Set for all MCP calls (both user and agent-scoped)
-    """
-    container = get_agent_container(name)
-    if not container:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    if container.status != "running":
-        raise HTTPException(status_code=503, detail="Agent is not running")
-
     # RELIABILITY-006 (#525): idempotency gate. Short-circuit duplicate
     # requests before consuming a capacity slot. The header is optional — when
     # absent, dedup is off and the request proceeds normally (back-compat).
     idem = idempotency_service.begin(
         idempotency_service.make_agent_scope(name), idempotency_key
     )
-    idem_done = False
     if idem.replay:
         await platform_audit_service.log(
             event_type=AuditEventType.EXECUTION,
@@ -209,6 +210,10 @@ async def chat_with_agent(
         _disp = DispatchBreaker(name).to_dict()
         if _disp.get("state") == "open":
             logger.warning(f"[Chat] Agent '{name}' dispatch circuit open, rejecting request")
+            # Nothing dispatched — release the idempotency claim so the caller
+            # can retry with the same key once the breaker recovers (#525),
+            # mirroring the CapacityFull branch below.
+            idempotency_service.fail(idem)
             _raise_circuit_open_503(
                 name, None, CircuitOpen(name, int(_disp.get("retry_after_seconds") or 0))
             )
@@ -268,7 +273,53 @@ async def chat_with_agent(
             }
         )
 
-    # Track queue position for observability
+    return ChatAdmission(
+        idem=idem,
+        execution_id=chat_execution_id,
+        capacity_result=capacity_result,
+        capacity=capacity,
+        queue_result=queue_result,
+        chat_timeout=chat_timeout,
+    )
+
+
+class ChatExecutionContext(NamedTuple):
+    """Execution-setup handoff for chat_with_agent (#1026 slice 2). Carries the
+    records/ids the downstream execute+finalize body consumes. As with
+    ChatAdmission (slice 1), every field here is referenced downstream — leaving
+    one out strands a local and NameErrors the admitted path."""
+    execution: object
+    task_execution_id: object
+    triggered_by: str
+    subscription_id: object
+    collaboration_activity_id: object
+    chat_activity_id: object
+    session: object
+    is_queued: bool
+
+
+async def _prepare_chat_execution(
+    *,
+    name: str,
+    request: ChatMessageRequest,
+    current_user: User,
+    x_source_agent: Optional[str],
+    x_via_mcp: Optional[str],
+    x_mcp_key_id: Optional[str],
+    x_mcp_key_name: Optional[str],
+    idem: object,
+    chat_execution_id: str,
+    capacity_result: object,
+    queue_result: str,
+) -> ChatExecutionContext:
+    """Execution setup for chat_with_agent (#1026 slice 2).
+
+    Creates the task-execution record (#96), looks up the agent subscription
+    (SUB-004), broadcasts the agent-to-agent collaboration event + activity,
+    gets/creates the chat session, tracks the chat-start activity, and logs the
+    inbound user message. Returns a ChatExecutionContext carrying the ids/records
+    the downstream execute+finalize body consumes.
+    """
     is_queued = capacity_result.state == "queued_in_memory"
     # Backwards-compat names: existing code below references `execution.id`.
     # Map the new chat_execution_id onto the old shape so the rest of the
@@ -365,7 +416,7 @@ async def chat_with_agent(
     )
 
     # Log user message to database
-    user_message = db.add_chat_message(
+    db.add_chat_message(
         session_id=session.id,
         agent_name=name,
         user_id=current_user.id,
@@ -374,6 +425,157 @@ async def chat_with_agent(
         content=request.message
     )
 
+    return ChatExecutionContext(
+        execution=execution,
+        task_execution_id=task_execution_id,
+        triggered_by=triggered_by,
+        subscription_id=_chat_subscription_id,
+        collaboration_activity_id=collaboration_activity_id,
+        chat_activity_id=chat_activity_id,
+        session=session,
+        is_queued=is_queued,
+    )
+
+
+@router.post("/{name}/chat")
+async def chat_with_agent(
+    request: ChatMessageRequest,
+    name: str = Depends(get_authorized_agent),
+    current_user: User = Depends(get_current_user),
+    x_source_agent: Optional[str] = Header(None),
+    x_via_mcp: Optional[str] = Header(None),
+    x_mcp_key_id: Optional[str] = Header(None),
+    x_mcp_key_name: Optional[str] = Header(None),
+    idempotency_key: Optional[str] = Header(None),
+):
+    """
+    Proxy chat messages to agent's internal web server and persist to database.
+
+    This endpoint enforces single-execution-at-a-time via the execution queue.
+    If the agent is busy, the request is queued (up to 3 waiting).
+    If the queue is full, returns 429 Too Many Requests.
+
+    Issue #98: Chat executions now also acquire a capacity slot so that
+    SlotService is the single source of truth for agent load. The queue
+    still enforces serial chat; the slot tracks resource usage visible
+    in the capacity meter.
+
+    Headers:
+    - X-Source-Agent: Set when one agent calls another (agent-to-agent)
+    - X-Via-MCP: Set for all MCP calls (both user and agent-scoped)
+    """
+    container = get_agent_container(name)
+    if not container:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if container.status != "running":
+        raise HTTPException(status_code=503, detail="Agent is not running")
+
+    # Admission gate (#1026 slice 1): idempotency (#525) + dispatch breaker
+    # (#526) + capacity acquire (#428). Returns a JSONResponse on idempotent
+    # replay, or a ChatAdmission to proceed; raises 409/503/429 on deny.
+    admission = await _admit_chat_request(
+        name=name,
+        request=request,
+        current_user=current_user,
+        x_source_agent=x_source_agent,
+        x_via_mcp=x_via_mcp,
+        x_mcp_key_id=x_mcp_key_id,
+        x_mcp_key_name=x_mcp_key_name,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(admission, JSONResponse):
+        return admission
+    idem = admission.idem
+    chat_execution_id = admission.execution_id
+    capacity_result = admission.capacity_result
+    capacity = admission.capacity
+    queue_result = admission.queue_result
+    chat_timeout = admission.chat_timeout
+
+    # Execution setup (#1026 slice 2): exec record (#96) + subscription (SUB-004)
+    # + collaboration broadcast/activity + session + chat-start activity + inbound
+    # user-message log. Returns the ids/records the execute+finalize body below
+    # consumes; every field is unpacked (slice-1 lesson: a stranded local
+    # NameErrors the admitted path).
+    ctx = await _prepare_chat_execution(
+        name=name,
+        request=request,
+        current_user=current_user,
+        x_source_agent=x_source_agent,
+        x_via_mcp=x_via_mcp,
+        x_mcp_key_id=x_mcp_key_id,
+        x_mcp_key_name=x_mcp_key_name,
+        idem=idem,
+        chat_execution_id=chat_execution_id,
+        capacity_result=capacity_result,
+        queue_result=queue_result,
+    )
+    execution = ctx.execution
+    task_execution_id = ctx.task_execution_id
+    triggered_by = ctx.triggered_by
+    _chat_subscription_id = ctx.subscription_id
+    collaboration_activity_id = ctx.collaboration_activity_id
+    chat_activity_id = ctx.chat_activity_id
+    session = ctx.session
+    is_queued = ctx.is_queued
+
+    # Execute + finalize (#1026 slice 3): dispatch to the agent, persist the
+    # assistant message + observability, complete activities, write the terminal
+    # execution row, store the idempotency snapshot, and (on error) run SUB-003
+    # auto-switch + map the HTTPException. Always releases the slot + idem claim.
+    return await _run_chat_and_finalize(
+        name=name,
+        request=request,
+        current_user=current_user,
+        x_source_agent=x_source_agent,
+        x_mcp_key_name=x_mcp_key_name,
+        triggered_by=triggered_by,
+        task_execution_id=task_execution_id,
+        _chat_subscription_id=_chat_subscription_id,
+        chat_activity_id=chat_activity_id,
+        collaboration_activity_id=collaboration_activity_id,
+        session=session,
+        execution=execution,
+        queue_result=queue_result,
+        is_queued=is_queued,
+        chat_timeout=chat_timeout,
+        idem=idem,
+        capacity=capacity,
+    )
+
+
+async def _run_chat_and_finalize(
+    *,
+    name: str,
+    request: ChatMessageRequest,
+    current_user: User,
+    x_source_agent: Optional[str],
+    x_mcp_key_name: Optional[str],
+    triggered_by: str,
+    task_execution_id: object,
+    _chat_subscription_id: object,
+    chat_activity_id: object,
+    collaboration_activity_id: object,
+    session: object,
+    execution: object,
+    queue_result: str,
+    is_queued: bool,
+    chat_timeout: int,
+    idem: object,
+    capacity: object,
+):
+    """Execute the chat against the agent and finalize (#1026 slice 3).
+
+    Dispatches the request to the agent server, persists the assistant message +
+    observability, completes the chat/collaboration activities, writes the
+    terminal execution-status row, and stores the idempotency snapshot. On the
+    agent-call error paths it records the failure, runs SUB-003 auto-switch
+    (429/auth), and raises the mapped HTTPException. The ``finally`` always
+    releases the capacity slot and any still-in-flight idempotency claim.
+    Returns the agent response dict (the endpoint's response body).
+    """
+    idem_done = False
     execution_success = False
     try:
         # chat_timeout already fetched above for slot acquisition (Issue #98)
