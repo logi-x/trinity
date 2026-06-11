@@ -46,9 +46,84 @@ The panel updates in real time via WebSocket events as each run completes, with 
 
 Every iteration is a normal execution: it creates its own row with `triggered_by: "loop"` and the parent `loop_id`, visible on the Executions page and per-execution detail view. In analytics timeline views (the agent's Overview tab and execution charts), loop executions appear as their own **Loops** category with a distinct color — they are not folded into Scheduled.
 
+## Common Patterns
+
+These three shapes cover most loop use cases. Pick by what ends the loop: a count, a condition, or a clock.
+
+### Iterative refinement (fixed mode + chaining)
+
+Run a fixed number of progressively better passes, feeding each result into the next:
+
+```json
+{
+  "message": "Improve the draft. Previous version: {{previous_response}}",
+  "max_runs": 4
+}
+```
+
+`{{previous_response}}` is lossy — only the trailing 2,000 characters carry over. When iterations build a real artifact (a draft, a migration, a report), don't rely on it: instruct the agent to keep the artifact in a file in its workspace and re-read it each run — `Refine the draft in report.md — read it first, improve it, write it back.` The agent's filesystem persists across runs; the loop context doesn't.
+
+### Agentic retry (until mode)
+
+Keep trying until it works, bounded by a safety cap:
+
+```json
+{
+  "message": "Attempt the migration. If it succeeds, paste the passing output and end your reply with [[DONE]]. Otherwise, fix the error and report what failed.",
+  "max_runs": 8,
+  "stop_signal": "[[DONE]]",
+  "timeout_per_run": 600
+}
+```
+
+The loop exits with `stop signal matched` on the first success, and `max runs reached` if it never succeeds within the cap.
+
+### Bounded polling (until mode + delay)
+
+Watch something external on a cadence, without holding a connection open:
+
+```json
+{
+  "message": "Check the deploy health endpoint. If healthy, reply [[DONE]]; else report the current status.",
+  "max_runs": 30,
+  "stop_signal": "[[DONE]]",
+  "delay_seconds": 120
+}
+```
+
+This polls every 2 minutes for up to an hour and exits the moment the condition holds. For cadences slower than the 1-hour delay ceiling, a loop is the wrong tool — use a [schedule](scheduling.md) instead.
+
+### Backlog draining (until mode + a work skill)
+
+If the agent has a work-queue skill (for example the abilities `work-loop` pattern: pick one issue, do it, close it, exit), a loop turns it into a bounded autonomous session:
+
+```json
+{
+  "message": "Run /work-loop. Process exactly one backlog item. If the backlog is empty, reply [[DONE]].",
+  "max_runs": 20,
+  "stop_signal": "[[DONE]]"
+}
+```
+
+Each iteration is one unit of work with its own execution row, cost, and timeout — far more observable than one giant "do everything" task.
+
+## Writing Good Until-Mode Loops
+
+Until mode is only as reliable as the stop condition you write. Three rules:
+
+1. **Tie the sentinel to verifiable evidence, not self-assessment.** Models skew positive when grading their own work — `reply [[DONE]] when the report is good` exits on the first pass. Anchor the sentinel to something checkable: passing test output, an HTTP 200, zero remaining TODO markers. If the condition is inherently subjective, keep `max_runs` low instead.
+2. **Always set the cap.** `stop_signal` is best-effort — the agent has to actually emit it. `max_runs` is guaranteed. The cap is the safety net, not the expected exit.
+3. **Set `timeout_per_run`.** A hung iteration silently stalls the whole sequence. Size it to the task (e.g. 600s for a test suite) rather than inheriting a long agent default.
+
+And once a loop is running, **watch for stalls**: if consecutive responses are near-identical (same failure, same output, no state change), the loop is burning budget without progress. Stop it rather than letting it run to the cap.
+
 ## For Agents
 
 Agents (and scripts) start loops via MCP tools or REST. The permission model matches `chat_with_agent`: owner, admin, or shared access on the target agent; agent-scoped MCP keys need an explicit permission grant.
+
+### From Claude Code: `/trinity:loop`
+
+If you work in Claude Code with the [abilities trinity plugin](../abilities/trinity-plugin.md) installed, `/trinity:loop` is the fastest way to start a loop — it parses a natural-language request (`/trinity:loop @ci-agent run the test suite until it passes, max 10`), picks the mode, writes the sentinel instruction into the message for you, fires `run_agent_loop`, and watches progress locally. See [trinity Plugin — Remote Loops](../abilities/trinity-plugin.md#remote-loops-trinityloop).
 
 ### MCP Tools
 
@@ -115,7 +190,8 @@ curl -X POST http://localhost:8000/api/agents/my-agent/loops \
 
 ## See Also
 
+- [trinity Plugin](../abilities/trinity-plugin.md) — `/trinity:loop`, the conversational entry point from Claude Code
 - [Fan-Out](fan-out.md) — Parallel batch counterpart
-- [Scheduling](scheduling.md) — Cron-based recurring tasks
+- [Scheduling](scheduling.md) — Cron-based recurring tasks; the right tool for cadences slower than 1 hour
 - [Executions](../operations/executions.md) — Where each loop iteration appears
 - [Agent Configuration](../agents/agent-configuration.md) — Execution timeout and parallel task limits

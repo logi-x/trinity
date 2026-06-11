@@ -88,9 +88,9 @@
 ## Abilities (Agent Development Toolkit)
 
 - [Overview](abilities/overview.md) — Plugin marketplace introduction, quick start
-- [create-agent Plugin](abilities/create-agent-plugin.md) — Agent creation wizards (11 wizards)
-- [agent-dev Plugin](abilities/agent-dev-plugin.md) — Development tools, memory systems, backlog workflow
-- [trinity Plugin](abilities/trinity-plugin.md) — Platform deployment and sync
+- [create-agent Plugin](abilities/create-agent-plugin.md) — Agent creation wizards (13 wizards)
+- [agent-dev Plugin](abilities/agent-dev-plugin.md) — Development tools, memory systems, git sync, backlog cycle, pipelines
+- [trinity Plugin](abilities/trinity-plugin.md) — Platform deployment, sync, remote loops, instance provisioning
 - [dev-methodology Plugin](abilities/dev-methodology-plugin.md) — Documentation-driven development
 - [utilities Plugin](abilities/utilities-plugin.md) — Ops and productivity tools
 
