@@ -128,6 +128,7 @@ def _load_media_stream_module() -> types.ModuleType:
 
     config_mod = types.ModuleType("config")
     config_mod.REDIS_URL = "redis://test:test@redis:6379"
+    config_mod.VOIP_MAX_CALL_DURATION = 600  # added by #1091; stub must track the import list
 
     database_mod = types.ModuleType("database")
     database_mod.db = MagicMock()
