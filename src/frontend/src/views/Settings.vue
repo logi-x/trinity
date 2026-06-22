@@ -45,6 +45,9 @@
           <!-- #5 — Security / Two-Factor (enterprise, gated by `2fa`) -->
           <TwoFactorPanel v-if="activeTab === 'security'" />
 
+          <!-- #32 — Single Sign-On (enterprise, gated by `sso`) -->
+          <SsoPanel v-if="activeTab === 'sso'" />
+
           <!-- Platform Section -->
           <div v-if="activeTab === 'general'" class="bg-white dark:bg-gray-800 shadow dark:shadow-gray-900 rounded-lg">
             <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
@@ -1911,6 +1914,7 @@ import { useEnterpriseStore } from '../stores/enterprise'
 import NavBar from '../components/NavBar.vue'
 import McpKeysTab from '../components/settings/McpKeysTab.vue'
 import TwoFactorPanel from '../components/settings/TwoFactorPanel.vue'
+import SsoPanel from '../components/settings/SsoPanel.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 
 const router = useRouter()
@@ -1942,6 +1946,7 @@ const ALL_TABS = [
   { id: 'integrations', label: 'Integrations', adminOnly: true  },
   { id: 'mcp-keys',     label: 'MCP Keys',     adminOnly: false },
   { id: 'security',     label: 'Security',     adminOnly: false, requires: '2fa' },
+  { id: 'sso',          label: 'SSO',          adminOnly: true,  requires: 'sso' },
   { id: 'agents',       label: 'Agents',       adminOnly: true  },
 ]
 const { isAdmin } = useRole()

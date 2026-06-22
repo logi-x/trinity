@@ -2876,6 +2876,54 @@ Standalone mobile-friendly admin page for managing agents on the go. Designed as
 
 ---
 
+## 40. Enterprise Single Sign-On — OIDC (trinity-enterprise#32)
+
+> Section number provisional — this branch is based on the 2FA branch (behind
+> `dev`); the final number resolves on rebase to `dev`. Enterprise feature on
+> the #847 seam; most logic lives in the private `enterprise/backend/sso/`
+> submodule. This documents the OSS-visible contract + the security rules.
+
+**Description**: Enterprise customers sign in through their identity provider
+(Okta, Entra ID, Google Workspace) instead of (or alongside) the OSS
+email-code / admin-password flow. **OIDC-first**; SAML 2.0 is a tracked
+follow-up (needs a native xmlsec dependency). Ships as an enterprise module —
+`register_module("sso")`, endpoints gated by `requires_entitlement("sso")`,
+zero OSS behavior change when the submodule is absent.
+
+- **FR-1 — Provider config (admin)**: CRUD over multiple named OIDC providers
+  (issuer/discovery URL, client id, client secret, scopes, enabled) +
+  connectivity test. Client secret is **write-only** (AES-256-GCM at rest,
+  Invariant #12) — never returned. Settings → SSO UI, admin-gated.
+- **FR-2 — OIDC login**: authorization-code flow with **PKCE**, single-use
+  `state` + `nonce` held in Redis (`GETDEL`, TTL). `id_token` validated against
+  the IdP JWKS restricted to **asymmetric** algorithms (no `none`/`HS*`);
+  `iss`/`aud`/`exp` checked by python-jose, `nonce` matched. Dependency-free
+  (httpx + python-jose, already in-image).
+- **FR-3 — Single mint path**: the callback exchanges the validated assertion
+  for a **standard platform JWT** via the OSS `create_access_token` — no second
+  session mechanism (Invariant: OSS token issuance stays the single mint path).
+- **FR-4 — 2FA composition (#5)**: after IdP auth the OSS `mfa_gate` still
+  runs, so a local second factor can be demanded; the callback returns a 2FA
+  challenge instead of a token in that case.
+- **FR-5 — JIT provisioning (#314)**: an unknown email is rejected unless
+  `auto_provision` is enabled, then added to the whitelist at the configured
+  `default_role` — never silently elevated. Suspended accounts are refused.
+- **FR-6 — Coexistence + break-glass**: OSS email/admin login stays available
+  (configurable `allow_password_fallback`); admin password login always works.
+- **FR-7 — Audit**: `login_success` / `login_failure` / `mfa_challenge_issued`
+  written to the OSS `audit_log` (`method: "sso"`).
+
+**API** (enterprise, gated): `GET/POST/PUT/DELETE /api/enterprise/sso/providers`,
+`POST .../providers/{id}/test`, `GET/PUT .../config` (admin); `GET
+.../public-providers` (unauth, `{id,name}` of enabled IdPs); `GET
+.../login/{id}` → IdP and `GET .../callback` (unauth login flow).
+
+**Out of scope (follow-up)**: SAML 2.0 (separate issue — native xmlsec dep +
+signature-wrap review); SCIM auto-provisioning; per-provider role mapping from
+IdP groups.
+
+---
+
 ## Out of Scope
 
 - Multi-tenant deployment (single org only)
