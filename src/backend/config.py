@@ -18,6 +18,28 @@ EMAIL_AUTH_ENABLED = os.getenv("EMAIL_AUTH_ENABLED", "true").lower() == "true"
 # code requests for already-whitelisted emails (separate endpoint).
 PUBLIC_ACCESS_REQUESTS_ENABLED = os.getenv("PUBLIC_ACCESS_REQUESTS_ENABLED", "false").lower() == "true"
 
+# Operator intake (trinity-enterprise#38). At first-run setup the operator may
+# opt in to "occasionally receive important security & product updates"; when
+# they do, their email + company are submitted once to an Ability.ai-operated
+# hosted intake endpoint (a sibling endpoint on the same Cloudflare-fronted
+# intake app as the #1116 in-app bug reporter). This is identifiable, explicit
+# opt-in contact capture — NOT anonymous telemetry — so it only fires on an
+# affirmative consent checkbox. Fire-and-forget and once-per-install: a blocked
+# or failed POST never delays or breaks setup.
+#
+# OPERATOR_INTAKE_ENABLED=false (or the cross-tool DO_NOT_TRACK=1 convention)
+# fully disables the outbound submission for air-gapped / privacy-strict
+# deployments — the consent box still appears but nothing ever leaves the box.
+OPERATOR_INTAKE_ENABLED = (
+    os.getenv("OPERATOR_INTAKE_ENABLED", "true").lower() == "true"
+    and os.getenv("DO_NOT_TRACK", "0") not in ("1", "true", "True")
+)
+# Stable Cloudflare-fronted vanity domain (same app as #1116's /v1/report-bug);
+# /v1/ versions the contract so the backing Worker can be replaced forever.
+OPERATOR_INTAKE_URL = os.getenv(
+    "OPERATOR_INTAKE_URL", "https://intake.abilityai.dev/v1/operator-intake"
+)
+
 # JWT Settings
 # SECURITY: SECRET_KEY must be set via environment variable in production
 # Generate with: openssl rand -hex 32

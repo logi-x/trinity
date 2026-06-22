@@ -3075,6 +3075,65 @@ side-effect profile).
 
 ---
 
+## 43. First-Run Operator Profile — Intake + Admin Email Login (trinity-enterprise#38, #82)
+
+### 43.1 Operator Intake at First-Run Setup (trinity-enterprise#38)
+
+**Description**: At first-run setup (the admin-creation step), the operator may
+provide their **email + company** (plus optional name/role/use-case) and **opt
+in** to "occasionally receive important security & product updates." On that
+affirmative consent, the details are submitted **once** to an Ability.ai-operated
+hosted intake endpoint — a sibling endpoint on the same Cloudflare-fronted intake
+app as #1116's in-app bug reporter (`/v1/report-bug` → `/v1/operator-intake`).
+This is **identifiable, explicit opt-in contact capture**, distinct from the
+anonymous usage telemetry tracked separately (#758 / trinity-enterprise#12).
+
+- **FR-1 — Capture & consent**: optional `email`/`company`/`name`/`role`/
+  `use_case` on `POST /api/setup/admin-password`; an **affirmative,
+  unchecked-by-default** consent checkbox (`consent_updates`). Declining/skipping
+  never blocks completing setup. The form shows exactly what is sent and to whom.
+- **FR-2 — Hosted intake, no email needed**: the submission is a fire-and-forget
+  HTTPS POST (`services/operator_intake_service.py`, `httpx`, 5s) — it does **not**
+  use the email provider, so it works on a fresh install with no Resend key. A
+  blocked/failed/air-gapped POST never delays or breaks setup.
+- **FR-3 — At-most-once**: a server-side `operator_intake_submitted` marker in
+  `system_settings` is claimed **before** the POST, so restarts / re-runs /
+  concurrent workers never double-submit. A stable random `installation_id`
+  (also in `system_settings`, the seed for future #758 telemetry) correlates the
+  submission.
+- **FR-4 — Off switch**: `OPERATOR_INTAKE_ENABLED=false` (or the cross-tool
+  `DO_NOT_TRACK=1`) fully disables the outbound submission for air-gapped /
+  privacy-strict installs — the consent box still appears, nothing leaves the box.
+  `OPERATOR_INTAKE_URL` repoints the endpoint (self-host). Consent fires only on
+  `consent_updates && email`.
+
+### 43.2 Admin Email Login — Phase 1 (#82)
+
+**Description**: The email captured at setup becomes the admin's **sign-in
+identity** — the operator can log in with **email + password** instead of the
+fixed `admin` username. **No verification email is sent**: a fresh install has no
+email provider configured, so the email is simply *bound* to the admin account
+(not verified via a code). The code-based second factor (email OTP after
+password) is **Phase 2**, gated on a configured email provider and the existing
+`mfa_gate`/`SecondFactorProvider` seam (#5/#388) — out of scope here.
+
+- **FR-1 — Resolve by username OR email**: `dependencies.authenticate_user`
+  resolves the identifier by username, then (when it looks like an email and no
+  username matches) by email. The password check still runs, so only an account
+  with a password hash (the admin) can authenticate — email-code-only users
+  (no password) never can.
+- **FR-2 — Setup binding**: `POST /api/setup/admin-password` validates the email
+  shape (permissive, before any write — a typo 400s cleanly) and binds it to the
+  admin via `db.update_user('admin', {'email': …})`. Login UI exposes an editable
+  "Username or email" field (default `admin`).
+- **FR-3 — Existing-admin transition**: an admin created before #82 (stored email
+  = placeholder `admin`) registers a real email via `PUT /api/users/me/email`
+  (own-account scoped; 409 if the email belongs to another account), surfaced as
+  an **Admin sign-in email** card in Settings → General. No verification email is
+  sent; existing `admin`+password login keeps working until/unless an email is set.
+
+---
+
 ## Out of Scope
 
 - Multi-tenant deployment (single org only)

@@ -5,16 +5,28 @@ Provides endpoints for initial admin password setup on first launch.
 These endpoints require NO authentication and only work before setup is completed.
 """
 import logging
+import re
 import secrets
 import threading
-from fastapi import APIRouter, HTTPException, Request
+from typing import Optional
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from database import db
 from dependencies import hash_password
+from services.operator_intake_service import submit_operator_intake
 from utils.password_validation import validate_password_strength, PASSWORD_REQUIREMENTS_MESSAGE
 
 logger = logging.getLogger(__name__)
+
+# The fixed admin username this endpoint provisions (matches update_user_password
+# below). Email captured here is bound to THIS account as its sign-in identity.
+_ADMIN_USERNAME = "admin"
+
+# Lightweight email shape check — deliberately permissive (one @, a dot in the
+# domain, no spaces). We only need to reject obvious typos; we never send a
+# verification mail here (a fresh install has no email provider configured).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
@@ -174,10 +186,26 @@ def clear_setup_token() -> None:
 
 
 class SetAdminPasswordRequest(BaseModel):
-    """Request body for setting admin password."""
+    """Request body for setting admin password.
+
+    The optional operator-profile fields (trinity-enterprise#38 / #82 Phase 1)
+    are captured at first run. `email`, when provided, becomes the admin's
+    sign-in identity (login with email + password instead of the fixed
+    'admin'). The rest are only forwarded to the hosted intake endpoint, and
+    only when `consent_updates` is true.
+    """
     password: str = Field(..., max_length=128)
     confirm_password: str = Field(..., max_length=128)
     setup_token: str
+    # Optional operator profile — all skippable; setup completes without them.
+    email: Optional[str] = Field(None, max_length=254)
+    company: Optional[str] = Field(None, max_length=200)
+    name: Optional[str] = Field(None, max_length=200)
+    role: Optional[str] = Field(None, max_length=200)
+    use_case: Optional[str] = Field(None, max_length=500)
+    # Affirmative, opt-in consent to occasionally receive security & product
+    # updates. ONLY when true is anything submitted to the hosted intake.
+    consent_updates: bool = False
 
 
 @router.get("/status")
@@ -206,7 +234,9 @@ async def get_setup_status():
 
 
 @router.post("/admin-password")
-async def set_admin_password(data: SetAdminPasswordRequest, request: Request):
+async def set_admin_password(
+    data: SetAdminPasswordRequest, request: Request, background_tasks: BackgroundTasks
+):
     """
     Set admin password on first launch. No auth required, only works once.
 
@@ -263,11 +293,31 @@ async def set_admin_password(data: SetAdminPasswordRequest, request: Request):
             detail="Passwords do not match"
         )
 
+    # Validate the operator email shape up-front (before any writes) so a typo
+    # surfaces as a clean 400 rather than half-completing setup. Empty/absent is
+    # fine — the email is optional.
+    normalized_email = (data.email or "").strip().lower()
+    if normalized_email and not _EMAIL_RE.match(normalized_email):
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
     # Hash the password and update admin user
     hashed_password = hash_password(data.password)
 
-    # Update admin user's password in database
-    db.update_user_password('admin', hashed_password)
+    # Update admin user's password in database (creates the admin row if absent)
+    db.update_user_password(_ADMIN_USERNAME, hashed_password)
+
+    # Register the operator email as the admin's sign-in identity (#82 Phase 1).
+    # No verification email is sent: a fresh install has no email provider
+    # configured (no Resend key), so we cannot deliver a code here. We simply
+    # bind the email to the admin account — the operator can then sign in with
+    # email + password instead of the fixed 'admin' username.
+    email_registered = False
+    if normalized_email:
+        try:
+            db.update_user(_ADMIN_USERNAME, {"email": normalized_email})
+            email_registered = True
+        except Exception as e:  # never block setup on a profile write
+            logger.warning("Failed to register admin email at setup: %s", type(e).__name__)
 
     # Mark setup as completed
     db.set_setting('setup_completed', 'true')
@@ -275,4 +325,18 @@ async def set_admin_password(data: SetAdminPasswordRequest, request: Request):
     # The token is now useless (endpoint 403s henceforth); remove it from Redis (#1165).
     clear_setup_token()
 
-    return {"success": True}
+    # Operator intake (trinity-enterprise#38): only on affirmative consent AND a
+    # valid email. Scheduled as a background task so it runs AFTER the response is
+    # sent — it can never delay or break setup. The service is idempotent
+    # (once-per-install) and swallows all errors (air-gapped / blocked / offline).
+    if data.consent_updates and normalized_email:
+        background_tasks.add_task(
+            submit_operator_intake,
+            email=normalized_email,
+            company=(data.company or "").strip() or None,
+            name=(data.name or "").strip() or None,
+            role=(data.role or "").strip() or None,
+            use_case=(data.use_case or "").strip() or None,
+        )
+
+    return {"success": True, "email_registered": email_registered}

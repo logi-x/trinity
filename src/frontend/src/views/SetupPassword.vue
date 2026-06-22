@@ -167,6 +167,67 @@
             </div>
           </div>
 
+          <!-- Operator profile (optional) — trinity-enterprise#38 / #82 Phase 1.
+               Email doubles as the admin sign-in identity; everything here is
+               skippable and never blocks completing setup. -->
+          <div class="pt-2 border-t border-gray-200 dark:border-gray-700 space-y-4">
+            <div>
+              <label for="adminEmail" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Admin email <span class="text-gray-400 font-normal">(optional)</span>
+              </label>
+              <div class="mt-1">
+                <input
+                  type="email"
+                  id="adminEmail"
+                  v-model="email"
+                  :disabled="loading"
+                  class="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-action-primary-500 focus:border-action-primary-500 dark:bg-gray-700 dark:text-white"
+                  placeholder="you@company.com"
+                  autocomplete="email"
+                />
+              </div>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Sign in with this email and your password (instead of the <code class="bg-gray-100 dark:bg-gray-700 px-1 rounded">admin</code> username). You can also add it later in Settings.
+              </p>
+            </div>
+
+            <div>
+              <label for="company" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Company / organization <span class="text-gray-400 font-normal">(optional)</span>
+              </label>
+              <div class="mt-1">
+                <input
+                  type="text"
+                  id="company"
+                  v-model="company"
+                  :disabled="loading"
+                  class="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-action-primary-500 focus:border-action-primary-500 dark:bg-gray-700 dark:text-white"
+                  placeholder="Acme Inc."
+                />
+              </div>
+            </div>
+
+            <!-- Explicit opt-in consent. Only when checked (and an email is given)
+                 is anything sent to ability.ai. -->
+            <div class="flex items-start">
+              <div class="flex items-center h-5">
+                <input
+                  id="consentUpdates"
+                  type="checkbox"
+                  v-model="consentUpdates"
+                  :disabled="loading || !email"
+                  class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-action-primary-600 focus:ring-action-primary-500 disabled:opacity-50"
+                />
+              </div>
+              <label for="consentUpdates" class="ml-2 block text-sm text-gray-600 dark:text-gray-400">
+                Occasionally email me important security &amp; product updates.
+                <span class="block text-xs text-gray-500 dark:text-gray-500 mt-0.5">
+                  Sends your email{{ company ? ' + company' : '' }} to ability.ai — nothing else. Skippable; disable via env on air-gapped installs.
+                </span>
+              </label>
+            </div>
+          </div>
+
           <!-- Error Message -->
           <div v-if="error" class="rounded-md bg-status-danger-50 dark:bg-status-danger-900/30 p-4">
             <div class="flex">
@@ -196,7 +257,7 @@
 
       <!-- Info Text -->
       <p class="mt-4 text-center text-xs text-gray-500 dark:text-gray-400">
-        You'll use this password to log in as the admin user.
+        Sign in as <code class="bg-gray-100 dark:bg-gray-700 px-1 rounded">admin</code> with this password — or with your email above, once set.
       </p>
     </div>
   </div>
@@ -213,6 +274,10 @@ const router = useRouter()
 const setupToken = ref('')
 const password = ref('')
 const confirmPassword = ref('')
+// Operator profile (optional) — trinity-enterprise#38 / #82 Phase 1
+const email = ref('')
+const company = ref('')
+const consentUpdates = ref(false)
 const showPassword = ref(false)
 const showConfirmPassword = ref(false)
 const loading = ref(false)
@@ -312,7 +377,12 @@ async function handleSubmit() {
     await axios.post('/api/setup/admin-password', {
       setup_token: setupToken.value,
       password: password.value,
-      confirm_password: confirmPassword.value
+      confirm_password: confirmPassword.value,
+      // Optional operator profile (skippable). Only sent to ability.ai when
+      // consent_updates is true AND an email is provided (enforced server-side).
+      email: email.value.trim() || null,
+      company: company.value.trim() || null,
+      consent_updates: consentUpdates.value && !!email.value.trim()
     })
 
     // Clear the cache so router knows setup is done
