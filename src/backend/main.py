@@ -69,7 +69,7 @@ from routers.ops import router as ops_router
 from routers.public_links import router as public_links_router, set_websocket_manager as set_public_links_ws_manager
 from routers.public import router as public_router
 from routers.files import router as files_router  # FILES-001 — outbound file downloads
-from routers.setup import router as setup_router, ensure_setup_token as _ensure_setup_token
+from routers.setup import router as setup_router
 from routers.telemetry import router as telemetry_router
 from routers.logs import router as logs_router
 from routers.agent_dashboard import router as agent_dashboard_router
@@ -317,25 +317,20 @@ async def lifespan(app: FastAPI):
     # Set up structured JSON logging (captured by Vector)
     setup_logging()
 
-    # Emit the first-time setup token as early as possible (SEC #177) — before any
-    # other startup step that could hang and suppress it. Only someone with access to
-    # server logs can read this token and complete setup, preventing installation
-    # hijack by unauthenticated remote attackers. Use logger.warning (not print): the
-    # logging StreamHandler flushes after every record, whereas print() is
-    # block-buffered to the Docker pipe without PYTHONUNBUFFERED=1 and the token is
-    # silently lost from `docker logs` (#858).
+    # Signal first-time setup as early as possible — before any other startup step
+    # that could hang and suppress it. The setup-token guard was removed in
+    # trinity-enterprise#49 (no token to print); the operator just opens the UI to
+    # create the admin account. Use logger.warning (not print): the logging
+    # StreamHandler flushes after every record, whereas print() is block-buffered
+    # to the Docker pipe without PYTHONUNBUFFERED=1 and is silently lost from
+    # `docker logs` (#858).
     from database import db as _db
     if _db.get_setting_value('setup_completed', 'false') != 'true':
-        # ensure_setup_token() claims the shared cross-worker token and prints it
-        # to the logs itself (exactly once, on the issuing worker — #1165). When
-        # Redis is unreachable no token is issued and setup is blocked; the next
-        # GET /api/setup/status reissues+prints once Redis recovers, so no
-        # restart is needed. logger (not print) keeps the #858 flush guarantee.
-        if _ensure_setup_token() is None:
-            logger.error(
-                "TRINITY FIRST-TIME SETUP REQUIRED but Redis is unreachable — no "
-                "setup token issued yet. Setup is blocked until Redis is reachable."
-            )
+        logger.warning(
+            "TRINITY FIRST-TIME SETUP REQUIRED — open the Trinity UI to create the "
+            "admin account. On an internet-reachable instance, keep it behind a "
+            "tunnel/VPN until setup completes (docs/DEPLOYMENT.md → Security)."
+        )
 
     # Start Redis Streams event bus + dispatcher (RELIABILITY-003 / #306).
     # Must start before the WebSocket endpoints begin accepting clients so the
