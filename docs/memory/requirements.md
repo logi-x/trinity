@@ -1246,9 +1246,9 @@ Trinity is autonomous agent orchestration and infrastructure — sovereign infra
   - Anonymous sessions have the same memory capability as email-verified sessions.
 
 ### 15.2 First-Time Setup
-- **Status**: ✅ Implemented (2025-12-23)
-- **Description**: Admin password wizard on fresh install
-- **Key Features**: Bcrypt hashing, API key configuration in Settings
+- **Status**: ✅ Implemented (2025-12-23; streamlined trinity-enterprise#49, 2026-06-23)
+- **Description**: Admin-account wizard on fresh install — a welcoming, animated single-screen first-run page (orbiting fleet constellation)
+- **Key Features**: Bcrypt hashing, API key configuration in Settings. **Streamlined (#49)**: the log-copied **setup token was removed** (no token field); **admin email is required** (becomes the sign-in identity) with field order email → password (+confirm) → company → updates opt-in. Security tradeoff of token removal is an explicit operator responsibility (deploy behind a tunnel/VPN until setup completes) — see `docs/DEPLOYMENT.md` → Security Recommendations
 - **Flow**: `docs/memory/feature-flows/first-time-setup.md`
 
 ### 15.3 Per-Agent API Key Control
@@ -3088,10 +3088,12 @@ app as #1116's in-app bug reporter (`/v1/report-bug` → `/v1/operator-intake`).
 This is **identifiable, explicit opt-in contact capture**, distinct from the
 anonymous usage telemetry tracked separately (#758 / trinity-enterprise#12).
 
-- **FR-1 — Capture & consent**: optional `email`/`company`/`name`/`role`/
-  `use_case` on `POST /api/setup/admin-password`; an **affirmative,
-  unchecked-by-default** consent checkbox (`consent_updates`). Declining/skipping
-  never blocks completing setup. The form shows exactly what is sent and to whom.
+- **FR-1 — Capture & consent**: **required `email`** (the admin sign-in identity,
+  trinity-enterprise#49) plus optional `company`/`name`/`role`/`use_case` on
+  `POST /api/setup/admin-password`; an **affirmative, unchecked-by-default**
+  consent checkbox (`consent_updates`). Declining the updates opt-in (or skipping
+  the optional profile fields) never blocks completing setup; only the email and
+  password are mandatory. The form shows exactly what is sent and to whom.
 - **FR-2 — Hosted intake, no email needed**: the submission is a fire-and-forget
   HTTPS POST (`services/operator_intake_service.py`, `httpx`, 5s) — it does **not**
   use the email provider, so it works on a fresh install with no Resend key. A
@@ -3122,10 +3124,12 @@ password) is **Phase 2**, gated on a configured email provider and the existing
   username matches) by email. The password check still runs, so only an account
   with a password hash (the admin) can authenticate — email-code-only users
   (no password) never can.
-- **FR-2 — Setup binding**: `POST /api/setup/admin-password` validates the email
-  shape (permissive, before any write — a typo 400s cleanly) and binds it to the
-  admin via `db.update_user('admin', {'email': …})`. Login UI exposes an editable
-  "Username or email" field (default `admin`).
+- **FR-2 — Setup binding**: `POST /api/setup/admin-password` **requires** the email
+  (missing → 422 at the model layer; blank/typo → 400, validated before any write
+  so setup never half-completes) and binds it to the admin via
+  `db.update_user('admin', {'email': …})`. Login UI exposes an editable
+  "Username or email" field (default `admin`). The setup token (#1165/SEC #177) is
+  removed (trinity-enterprise#49) — no token field, no Redis dependency for setup.
 - **FR-3 — Existing-admin transition**: an admin created before #82 (stored email
   = placeholder `admin`) registers a real email via `PUT /api/users/me/email`
   (own-account scoped; 409 if the email belongs to another account), surfaced as

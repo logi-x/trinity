@@ -1,13 +1,16 @@
-"""trinity-enterprise#38 / #82 Phase 1 — first-run operator profile capture.
+"""trinity-enterprise#38 / #82 / #49 — first-run admin account + operator profile.
 
-The setup endpoint optionally registers the admin email (sign-in identity) and,
-only on affirmative consent + a valid email, schedules the fire-and-forget
-intake as a background task. None of it may block or break setup.
+The setup endpoint registers the admin email (now REQUIRED — it is the sign-in
+identity, #49) and, only on affirmative consent, schedules the fire-and-forget
+operator intake as a background task. None of it may block or break setup, and a
+missing/blank/typo'd email is rejected before any write. The setup token was
+removed in #49, so there is no token machinery to stub here.
 """
 import asyncio
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
+from pydantic import ValidationError
 
 pytestmark = pytest.mark.unit
 
@@ -41,16 +44,16 @@ PW = "Sup3rSecret!!"
 def patched(monkeypatch):
     db = FakeDB()
     monkeypatch.setattr(setup, "db", db)
-    monkeypatch.setattr(setup, "ensure_setup_token", lambda: "tok")
-    monkeypatch.setattr(setup, "clear_setup_token", lambda: None)
     monkeypatch.setattr(setup, "validate_password_strength", lambda p: [])
     monkeypatch.setattr(setup, "hash_password", lambda p: "hashed:" + p)
     return db
 
 
-def _req(**kw):
+def _req(email="me@acme.com", **kw):
+    # email defaults so happy-path callers stay terse; pass email="" / a bad
+    # value to exercise the rejection paths.
     return setup.SetAdminPasswordRequest(
-        password=PW, confirm_password=PW, setup_token="tok", **kw
+        password=PW, confirm_password=PW, email=email, **kw
     )
 
 
@@ -69,13 +72,15 @@ def test_email_registered_and_intake_scheduled(patched):
     assert len(bg.tasks) == 1  # intake scheduled (runs after response)
 
 
-def test_consent_without_email_does_not_schedule(patched):
+def test_email_only_completes_setup_cleanly(patched):
+    """Email but no company/consent — completes, binds email, no intake."""
     bg = BackgroundTasks()
-    res = _run(_req(consent_updates=True), bg)
+    res = _run(_req(email="solo@acme.com"), bg)
 
-    assert res["email_registered"] is False
-    assert len(bg.tasks) == 0
+    assert res["email_registered"] is True
+    assert patched.users["admin"]["email"] == "solo@acme.com"
     assert patched.settings["setup_completed"] == "true"
+    assert len(bg.tasks) == 0
 
 
 def test_email_without_consent_registers_but_no_intake(patched):
@@ -95,13 +100,27 @@ def test_invalid_email_rejected_before_any_write(patched):
     assert ei.value.status_code == 400
     # Validated before writes — setup not marked complete, no admin email written.
     assert patched.settings["setup_completed"] == "false"
+    assert "admin" not in patched.users
     assert len(bg.tasks) == 0
 
 
-def test_no_profile_completes_setup_cleanly(patched):
+def test_blank_email_rejected_before_any_write(patched):
+    """A present-but-blank email is rejected with 400 (required field, #49)."""
     bg = BackgroundTasks()
-    res = _run(_req(), bg)
+    with pytest.raises(HTTPException) as ei:
+        _run(_req(email="   ", consent_updates=True), bg)
 
-    assert res["email_registered"] is False
-    assert patched.settings["setup_completed"] == "true"
+    assert ei.value.status_code == 400
+    assert patched.settings["setup_completed"] == "false"
     assert len(bg.tasks) == 0
+
+
+def test_email_is_required_at_model_layer():
+    """A missing email fails request validation (→ 422 at the API layer, #49)."""
+    with pytest.raises(ValidationError):
+        setup.SetAdminPasswordRequest(password=PW, confirm_password=PW)
+
+
+def test_no_setup_token_field_on_model():
+    """The setup-token field is gone (#49) — the model no longer declares it."""
+    assert "setup_token" not in setup.SetAdminPasswordRequest.model_fields
