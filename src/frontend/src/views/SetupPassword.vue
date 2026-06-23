@@ -250,14 +250,18 @@ async function handleSubmit() {
   --green-400:#4ade80; --green-500:#22c55e;
   --g950:#080a12; --g900:#0f1320; --g800:#1b2233; --g700:#2a3142;
   --ink:#f3f5fb; --muted:#9aa3b8; --muted2:#6b7385;
-  position:fixed; inset:0; overflow:auto;
+  /* Normal-flow full-bleed (NOT position:fixed) — fixed roots get clipped to a
+     transformed/contained ancestor and leave the viewport's light #app bg
+     showing through. width:100% fills the full-width #app; min-height:100vh
+     keeps the dark canvas covering the screen even when the form is short. */
+  position:relative; width:100%; min-height:100vh; overflow-x:hidden;
   background:var(--g950); color:var(--ink);
   font-family:'Inter',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
   -webkit-font-smoothing:antialiased;
 }
 
 /* ambient aurora backdrop */
-.aurora{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.aurora{position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none}
 .aurora::before,.aurora::after{content:"";position:absolute;border-radius:50%;filter:blur(90px);opacity:.5}
 .aurora::before{width:780px;height:780px;left:-180px;top:-220px;
   background:radial-gradient(circle at center,rgba(79,70,229,.55),transparent 60%);
@@ -267,14 +271,14 @@ async function handleSubmit() {
   animation:drift2 26s ease-in-out infinite alternate}
 @keyframes drift1{from{transform:translate(0,0)}to{transform:translate(60px,40px)}}
 @keyframes drift2{from{transform:translate(0,0)}to{transform:translate(-50px,-30px)}}
-.grid-fade{position:fixed;inset:0;z-index:0;opacity:.18;pointer-events:none;
+.grid-fade{position:absolute;inset:0;z-index:0;opacity:.18;pointer-events:none;
   background-image:linear-gradient(rgba(129,140,248,.10) 1px,transparent 1px),
                    linear-gradient(90deg,rgba(129,140,248,.10) 1px,transparent 1px);
   background-size:48px 48px;
   -webkit-mask-image:radial-gradient(circle at 30% 40%,black,transparent 75%);
   mask-image:radial-gradient(circle at 30% 40%,black,transparent 75%)}
 
-.stage{position:relative;z-index:1;min-height:100%;display:grid;grid-template-columns:1fr 1fr}
+.stage{position:relative;z-index:1;min-height:100vh;display:grid;grid-template-columns:1fr 1fr}
 @media(max-width:900px){.stage{grid-template-columns:1fr}}
 
 /* LEFT hero */
