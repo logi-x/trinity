@@ -26,7 +26,7 @@ _ADMIN_USERNAME = "admin"
 # Lightweight email shape check — deliberately permissive (one @, a dot in the
 # domain, no spaces). We only need to reject obvious typos; we never send a
 # verification mail here (a fresh install has no email provider configured).
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s.]+$")
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 

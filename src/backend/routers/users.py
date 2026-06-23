@@ -18,7 +18,7 @@ VALID_ROLES = {"admin", "creator", "operator", "user"}
 
 # Permissive email-shape check (mirrors routers/setup.py): one @, a dot in the
 # domain, no spaces. Identity binding only — no verification mail is sent.
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s.]+$")
 
 
 class UserRoleUpdate(BaseModel):
