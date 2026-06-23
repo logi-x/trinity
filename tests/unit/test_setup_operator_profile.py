@@ -5,8 +5,24 @@ identity, #49) and, only on affirmative consent, schedules the fire-and-forget
 operator intake as a background task. None of it may block or break setup, and a
 missing/blank/typo'd email is rejected before any write. The setup token was
 removed in #49, so there is no token machinery to stub here.
+
+Import isolation (read before "simplifying" the lazy `_get_setup()` below):
+`routers.setup` pulls in database/dependencies/services, which import several
+backend `utils.*` leaves. The test harness pins `sys.modules["utils"]` to
+tests/utils (for api_client, etc.) and preloads only `utils.helpers`; a bare
+`from utils.<other> import …` at COLLECTION time flips `sys.modules["utils"]` to
+the backend package and breaks tests/utils consumers collected alongside us
+(e.g. test_setup.py's `utils.api_client`). That is exactly how the CI
+regression-diff "head" run failed (it collects the changed unit + integration
+tests together). So we do NOT import `routers.setup` at module level — collection
+stays backend-free — and defer the import (plus a spec-based preload of the
+backend utils leaves that does NOT touch `sys.modules["utils"]`) to first use
+inside the tests, which run after collection completes.
 """
 import asyncio
+import importlib.util
+import sys
+from pathlib import Path
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
@@ -14,7 +30,42 @@ from pydantic import ValidationError
 
 pytestmark = pytest.mark.unit
 
-import routers.setup as setup
+_BACKEND_UTILS = Path(__file__).resolve().parents[2] / "src" / "backend" / "utils"
+_setup_module = None
+
+
+def _get_setup():
+    """Import `routers.setup` lazily (at test run time, not collection time).
+
+    Pre-registers the backend `utils.*` leaves as `utils.<name>` first — the same
+    spec-based pattern conftest uses for `utils.helpers` — WITHOUT replacing
+    `sys.modules["utils"]`, so the heavy import chain resolves cleanly and
+    tests/utils stays intact. Three passes resolve inter-leaf imports regardless
+    of order. Cached so the work happens once per session.
+    """
+    global _setup_module
+    if _setup_module is not None:
+        return _setup_module
+    for _ in range(3):
+        for name in ("helpers", "errors", "credential_sanitizer",
+                     "password_validation", "url_validation", "image_optimize"):
+            full = f"utils.{name}"
+            existing = sys.modules.get(full)
+            if existing is not None and "src/backend" in str(getattr(existing, "__file__", "")):
+                continue
+            path = _BACKEND_UTILS / f"{name}.py"
+            if not path.exists():
+                continue
+            spec = importlib.util.spec_from_file_location(full, str(path))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[full] = mod
+            try:
+                spec.loader.exec_module(mod)
+            except Exception:
+                sys.modules.pop(full, None)  # let a later pass / import retry
+    import routers.setup as setup
+    _setup_module = setup
+    return setup
 
 
 class FakeDB:
@@ -42,6 +93,7 @@ PW = "Sup3rSecret!!"
 
 @pytest.fixture
 def patched(monkeypatch):
+    setup = _get_setup()
     db = FakeDB()
     monkeypatch.setattr(setup, "db", db)
     monkeypatch.setattr(setup, "validate_password_strength", lambda p: [])
@@ -52,14 +104,14 @@ def patched(monkeypatch):
 def _req(email="me@acme.com", **kw):
     # email defaults so happy-path callers stay terse; pass email="" / a bad
     # value to exercise the rejection paths.
-    return setup.SetAdminPasswordRequest(
+    return _get_setup().SetAdminPasswordRequest(
         password=PW, confirm_password=PW, email=email, **kw
     )
 
 
 def _run(data, bg):
     # request arg is unused by the handler body.
-    return asyncio.run(setup.set_admin_password(data, None, bg))
+    return asyncio.run(_get_setup().set_admin_password(data, None, bg))
 
 
 def test_email_registered_and_intake_scheduled(patched):
@@ -117,10 +169,11 @@ def test_blank_email_rejected_before_any_write(patched):
 
 def test_email_is_required_at_model_layer():
     """A missing email fails request validation (→ 422 at the API layer, #49)."""
+    setup = _get_setup()
     with pytest.raises(ValidationError):
         setup.SetAdminPasswordRequest(password=PW, confirm_password=PW)
 
 
 def test_no_setup_token_field_on_model():
     """The setup-token field is gone (#49) — the model no longer declares it."""
-    assert "setup_token" not in setup.SetAdminPasswordRequest.model_fields
+    assert "setup_token" not in _get_setup().SetAdminPasswordRequest.model_fields
