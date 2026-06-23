@@ -83,10 +83,10 @@
 - `git.py` - Git sync endpoints (status, sync, log, pull)
 
 *Auth & Security:*
-- `auth.py` - Admin login, email auth, token validation
-- `users.py` - User management, roles (ROLE-001)
+- `auth.py` - Admin login (username OR registered email + password, #82), email auth, token validation
+- `users.py` - User management, roles (ROLE-001); `PUT /me/email` self-service sign-in email (#82 transition)
 - `mcp_keys.py` - MCP API key management
-- `setup.py` - First-time setup wizard
+- `setup.py` - First-time setup wizard; optional operator profile — binds admin sign-in email + opt-in hosted intake (trinity-enterprise#38, #82)
 
 *Scheduling & Execution:*
 - `schedules.py` - Schedule CRUD and control
@@ -147,6 +147,7 @@
 - `template_service.py` - GitHub template cloning and processing
 - `agent_client.py` - HTTP client for agent container communication (chat, session, injection); hosts the transport circuit breaker — see [Circuit Breakers](#circuit-breakers-transport--dispatch-526)
 - `settings_service.py` - Centralized settings retrieval (API keys, ops config, agent quotas)
+- `operator_intake_service.py` - Fire-and-forget, once-per-install opt-in operator intake POST at first-run; owns `installation_id` (trinity-enterprise#38)
 
 *Execution & Scheduling:*
 - `task_execution_service.py` - Unified task execution lifecycle: slot mgmt, activity tracking, sanitization (EXEC-024). Runs the #678 reader-race auto-retry: on an empty result (502 dict body with `num_turns < 5`, `raw_message_count == 0`, `parse_failure_count == 0`) it fires one in-line retry with the **same** `execution_id` capped at 300s, persisting `retry_count` and rolling previous-attempt cost into the terminal write. Records dispatch-breaker outcomes — see [Circuit Breakers](#circuit-breakers-transport--dispatch-526). Hosts `apply_result` (the shared terminal applier) and the 202 dispatch-and-return path — see [Fire-and-Forget Dispatch](#fire-and-forget-dispatch-1083)
@@ -645,10 +646,11 @@ Token lifecycle: `secrets.token_urlsafe(32)` stored in `agent_schedules.webhook_
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/auth/mode` | Auth mode config (unauthenticated) |
-| POST | `/api/token` | Admin login (username/password, form-encoded) |
+| POST | `/api/token` | Admin login — `username` accepts `admin` OR the admin's registered email + password (#82); form-encoded |
 | POST | `/api/auth/email/request` / `/verify` | Request email code / verify and login |
 | GET | `/api/auth/validate` | Validate JWT (for nginx auth_request) |
 | GET | `/api/users/me` | Current user |
+| PUT | `/api/users/me/email` | Bind a sign-in email to the caller's own account (#82 transition; 409 if taken). No verification email sent |
 | GET | `/api/users` | List users with roles (admin-only; exposes `suspended_at` read-only) (ROLE-001) |
 | PUT | `/api/users/{username}/role` | Update user role (admin-only) |
 | GET | `/api/mcp/info` | MCP server info |

@@ -828,6 +828,89 @@ UPDATE users SET password_hash = 'changeme' WHERE username = 'admin';
 
 ---
 
+## Flow 3: Operator Profile — Intake + Admin Email Login (trinity-enterprise#38, #82)
+
+First-run setup additionally captures an **optional operator profile** that does
+two jobs at once from a single email field: it becomes the admin's **sign-in
+identity**, and (on explicit consent) it's submitted to a **hosted intake**.
+
+### Why no verification email at setup
+
+A fresh install has **no email provider** configured (no Resend key), so a
+verification code cannot be delivered during setup. The design works *around*
+that rather than blocking on it:
+
+- The email is **bound** to the admin account, not verified by a code. The
+  operator can immediately sign in with **email + password** (or still with
+  `admin` + password).
+- The hosted intake is a plain HTTPS POST to a Cloudflare Worker — it does **not**
+  use the email provider, so it works offline-of-email too.
+- The code-based second factor (email OTP after password) is **Phase 2**, gated
+  on a configured provider and the existing `mfa_gate` seam (#5/#388) — not built
+  here.
+
+### Frontend
+
+- **`views/SetupPassword.vue`** — adds optional **Admin email** + **Company**
+  fields and an **unchecked-by-default** consent checkbox: *"Occasionally email
+  me important security & product updates."* The consent box is disabled until an
+  email is entered. Submits `{email, company, consent_updates}` (consent only
+  true when both checked AND email present) to `POST /api/setup/admin-password`.
+- **`views/Login.vue`** — the admin form's fixed `admin` label becomes an
+  editable **"Username or email"** field (default `admin`), routed through the
+  unchanged `authStore.loginWithCredentials(identifier, password)`.
+- **`views/Settings.vue`** (General tab, admin) — **Admin sign-in email** card:
+  existing-admin transition. `PUT /api/users/me/email` → refresh profile.
+
+### Backend
+
+- **`POST /api/setup/admin-password`** (`routers/setup.py`) — validates the email
+  shape *before any write* (typo → clean 400, setup not half-completed); binds it
+  via `db.update_user('admin', {'email': …})`; returns `{success, email_registered}`.
+  On `consent_updates && email`, schedules `submit_operator_intake(...)` as a
+  **`BackgroundTasks`** job so it runs *after* the response — never delaying or
+  breaking setup.
+- **`services/operator_intake_service.py`** — fire-and-forget `httpx` POST (5s).
+  Guards: disabled via `OPERATOR_INTAKE_ENABLED=false` / `DO_NOT_TRACK`; **at-most-
+  once** via the `operator_intake_submitted` marker claimed *before* the POST;
+  no-op without an email. Owns the stable `installation_id` (random UUID in
+  `system_settings`, the #758 telemetry seed). Never raises; never logs the email.
+- **`dependencies.authenticate_user`** — resolves the identifier by username, then
+  by email when it looks like one and no username matched. The password check
+  still runs, so only an account *with* a password hash (the admin) authenticates
+  — email-code-only users (no password) never can.
+- **`PUT /api/users/me/email`** (`routers/users.py`) — own-account scoped; 409 if
+  the email belongs to another account; no verification email.
+
+### Hosted intake endpoint (out-of-repo Cloudflare Worker)
+
+Reuses #1116's intake app on the stable `https://intake.abilityai.dev` domain —
+**one added endpoint**, `POST /v1/operator-intake` (sibling to `/v1/report-bug`).
+The Worker lives outside this repo (`trinity-ops-agent/`, alongside the bug
+intake). `intake.abilityai.dev` is already CSP-allowed (`connect-src`, #1116), so
+no CSP change is needed. Versioned contract:
+
+```
+POST https://intake.abilityai.dev/v1/operator-intake
+{ installation_id, email, company?, name?, role?, use_case?,
+  consent: "security_and_product_updates", trinity_version, submitted_at }
+→ Worker: rate-limit + dedupe by installation_id → add to the security/product
+  updates list (server-held creds) → 2xx. Backend treats any response as
+  best-effort and never retries (at-most-once).
+```
+
+### Config
+
+| Env | Default | Purpose |
+|-----|---------|---------|
+| `OPERATOR_INTAKE_ENABLED` | `true` | `false` (or `DO_NOT_TRACK=1`) disables the outbound submission entirely (box still shows, nothing leaves) |
+| `OPERATOR_INTAKE_URL` | `https://intake.abilityai.dev/v1/operator-intake` | Repoint to self-host the intake |
+
+### Status
+- Operator Intake + Admin Email Login (Phase 1): **Working** (Implemented 2026-06-22)
+
+---
+
 ## Related Flows
 
 ### Upstream
@@ -849,3 +932,4 @@ UPDATE users SET password_hash = 'changeme' WHERE username = 'admin';
 | 2026-01-23 | Line number verification | Updated all line numbers to match current codebase. Verified: setup.py endpoints (22-34, 37-81), auth.py login blocks (20-22, 49-78, 153-158, 210-215), dependencies.py password hashing (15-37), db/users.py upsert (129-162), db/settings.py (49-83), router/index.js guards (165-220, 242-245), SetupPassword.vue (166-176, 205-207, 209-236). Added documentation for email auth login blocking and password strength validation. |
 | 2026-02-23 | Security Fix M-003 | Removed plaintext password fallback from `verify_password()` in dependencies.py:24-34. All passwords must now be bcrypt hashed. Invalid hash formats are rejected. Updated Password Hashing section and Security Considerations. |
 | 2026-03-26 | Security Fix SEC #177 | Added single-use setup token to prevent installation hijack. Token generated via `secrets.token_urlsafe(24)` at startup, printed to server logs, required in `POST /api/setup/admin-password`. Frontend adds setup token field with instructions to check `docker compose logs backend`. Constant-time comparison guards against timing attacks. |
+| 2026-06-22 | Operator profile — intake + admin email login (trinity-enterprise#38, #82) | Added Flow 3. Optional email/company + unchecked-by-default consent at setup; email binds as admin sign-in identity (login with email + password — **no verification email**, fresh installs have no Resend key); opt-in once-per-install fire-and-forget POST to a new `/v1/operator-intake` endpoint on #1116's Cloudflare intake app. New `services/operator_intake_service.py` (+ `installation_id`), `authenticate_user` email resolution, `PUT /api/users/me/email` + Settings card for existing-admin transition, `OPERATOR_INTAKE_ENABLED`/`OPERATOR_INTAKE_URL`. |
