@@ -121,6 +121,17 @@ export function createLoopTools(
               "Must be >= timeout_per_run (or the agent's execution timeout when unset). " +
               "Omit for no time bound (max_runs still applies)."
           ),
+        max_cost_usd: z
+          .number()
+          .gt(0)
+          .optional()
+          .describe(
+            "Optional per-loop USD cost budget. Checked at each iteration boundary " +
+              "(between runs) — the current run always finishes, so one run (including " +
+              "the first) can overshoot. Runs reporting no cost count as 0 toward the " +
+              "budget. When accumulated cost meets/exceeds the budget the loop stops " +
+              "with stop_reason='budget_exhausted'. Omit for no budget (max_runs still applies)."
+          ),
         no_progress_threshold: z
           .number()
           .int()
@@ -151,6 +162,7 @@ export function createLoopTools(
           delay_seconds?: number;
           timeout_per_run?: number;
           max_duration_seconds?: number;
+          max_cost_usd?: number;
           no_progress_threshold?: number;
           model?: string;
           allowed_tools?: string[];
@@ -174,6 +186,7 @@ export function createLoopTools(
             delay_seconds: params.delay_seconds,
             timeout_per_run: params.timeout_per_run,
             max_duration_seconds: params.max_duration_seconds,
+            max_cost_usd: params.max_cost_usd,
             no_progress_threshold: params.no_progress_threshold,
             model: params.model,
             allowed_tools: params.allowed_tools,
