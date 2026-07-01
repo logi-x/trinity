@@ -1234,9 +1234,10 @@ const ORB_TOOLS={
     const text=(body||title||'').trim();
     if(!text) return {error:'nothing to capture'};
     const r=await postAction('capture',{title:title||'', body:text});
-    if(r&&r.ok){ scheduleRefresh();   // #67 — fold it into the real graph (debounced across a burst)
+    if(r&&r.ok){ _pendingFocusTitle=r.title||text.slice(0,60);   // #72 — auto-select once integrated
+      scheduleRefresh();   // #67 — fold it into the real graph (debounced across a burst)
       return {ok:true, title:r.title, recorded_to:r.path,
-              note:'recorded and being integrated into the graph — it will appear on the orb shortly'}; }
+              note:'recorded and being integrated into the graph — it will appear and be selected shortly'}; }
     return {error:(r&&r.error)||'capture failed'};
   },
   // #61 Phase 4a — voice-triggered link (owner sessions only; the write tools are in the
@@ -1443,6 +1444,7 @@ async function setScope(tokens){
 // then refetch /data and rebuild IN PLACE (same machinery as setScope). #68: a visible
 // "integrating…" state + a result toast so the user can confirm the write landed.
 let refreshBusy=false, _refreshTimer=null, _refreshPending=false;   // #67/#71 shared refresh state
+let _pendingFocusTitle=null;   // #72 — a just-created note to auto-select once the refresh folds it in
 async function refreshGraph(reason){
   if(!VOICE_PROXY || !SCOPE_ENABLED) return {error:'no backend'};
   if(refreshBusy || scopeBusy) return {error:'busy'};
@@ -1462,12 +1464,19 @@ async function refreshGraph(reason){
       if(an||ae){   // #72 — rebuild ONLY when the graph actually changed (a no-op refresh keeps the selection)
         const data=await (await fetch(VOICE_PROXY+'/data',{headers:ORB_HEADERS})).json();
         applyData(data);
-        // restore the pre-refresh selection so adding a node/link mid-task doesn't deselect
-        if(selId!=null){ const ni=idIndex.get(selId); if(ni!=null) focusNode(ni); }
-        else if(selGroup && selGroup.length){ const idx=selGroup.map(id=>idIndex.get(id)).filter(v=>v!=null);
-          if(idx.length) highlightGroup(idx, true); }
+        // #72 — after a write, auto-SELECT the just-created note (no need to ask again);
+        // otherwise restore the pre-refresh selection so a mid-task refresh doesn't deselect.
+        let focused=false;
+        if(_pendingFocusTitle){ const nids=searchNodeIds(_pendingFocusTitle,1);
+          if(nids.length){ focusNode(nids[0]); focused=true; } }
+        if(!focused){
+          if(selId!=null){ const ni=idIndex.get(selId); if(ni!=null) focusNode(ni); }
+          else if(selGroup && selGroup.length){ const idx=selGroup.map(id=>idIndex.get(id)).filter(v=>v!=null);
+            if(idx.length) highlightGroup(idx, true); }
+        }
         toast('graph updated · +'+an+' notes, +'+ae+' links');
       } else { toast('graph up to date'); }   // nothing new → no rebuild, selection intact
+      _pendingFocusTitle=null;   // consumed
     } else { toast('refresh failed'+(res&&res.error?': '+res.error:'')); }
     return res;
   }catch(e){ toast('refresh failed ('+(e.message||e)+')'); return {error:String(e&&e.message||e)}; }
@@ -1549,8 +1558,9 @@ async function doCapture(){
   let r; try{ r=await postAction('capture',{body}); } finally { _capInFlight=false; }
   if(r&&r.ok){ ta.value=''; setActStatus(''); toggleActions(false);
     toast('captured → '+(r.title||'inbox').slice(0,40));
-    // #67 — fold it into the actual graph so it appears as a real, connectable node
-    // (replaces the old transient live-cell that read as "not connected").
+    // #67 — fold it into the actual graph so it appears as a real, connectable node.
+    // #72 — auto-select the new note once integrated (no separate "select it" step).
+    _pendingFocusTitle = r.title || body.split('\n')[0].slice(0,60);
     refreshGraph('capture'); }
   else setActStatus('capture failed: '+((r&&r.error)||'?'));
 }
