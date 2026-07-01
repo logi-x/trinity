@@ -205,6 +205,15 @@ def _require_write_enabled() -> None:
         raise HTTPException(status_code=404, detail="Brain Orb writes are not enabled")
 
 
+async def _safe_audit(**kwargs) -> None:
+    """Best-effort audit: a logging failure must never mask a completed write or 500 the
+    caller — for a fresh-idempotency-key client that would drive a duplicate write (review F5)."""
+    try:
+        await platform_audit_service.log(**kwargs)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("brain-orb audit log failed: %s", e)
+
+
 @router.get("/{agent_name}/brain-orb/actions")
 async def get_brain_orb_actions(agent_name: OwnedAgentByName):
     """Report the agent's write-surface capability + skill allow-list for the orb's
@@ -269,8 +278,11 @@ async def post_brain_orb_action(
             _ACTION_RATE_WINDOW,
             detail="Too many Brain Orb actions.",
         )
+        # Backend timeout sits ABOVE the agent-server hook's 60s (review F3) so a slow
+        # hook surfaces as the agent's own 504, not a premature backend timeout that
+        # would release the idempotency claim on an ambiguous outcome → double-write.
         response = await _agent_request(
-            agent_name, "POST", "/api/brain-orb/action", content=body, timeout=60.0
+            agent_name, "POST", "/api/brain-orb/action", content=body, timeout=90.0
         )
         result = _passthrough(response, not_found="KB writes not supported")
     except HTTPException:
@@ -287,7 +299,7 @@ async def post_brain_orb_action(
         snapshot = None
     idempotency_service.complete(decision, None, snapshot)
 
-    await platform_audit_service.log(
+    await _safe_audit(
         event_type=AuditEventType.CONFIGURATION,
         event_action=f"brain_orb_{action}",
         source="api",
@@ -310,10 +322,15 @@ async def post_brain_orb_refresh(agent_name: OwnedAgentByName, request: Request,
     `/brain-orb/data` and rebuilds in place — mirroring the Phase-2 scope flow. The agent
     owns the reindex + generation (Invariant #8); Trinity brokers the trigger. 200s timeout
     sits above the agent hook's 180s (a large-vault reindex can be slow). 404 when the agent
-    ships no `action` hook. Audited (`brain_orb_refresh`)."""
+    ships no `action` hook. Audited (`brain_orb_refresh`).
+
+    Write-flag-gated (review F1): refresh drives the agent's `action` hook (an exec/
+    reindex), so the `BRAIN_ORB_WRITE_ENABLED` kill-switch must gate it too — like
+    every other Phase-4 write route — not just `BRAIN_ORB_ENABLED`."""
+    _require_write_enabled()
     response = await _agent_request(agent_name, "POST", "/api/brain-orb/refresh", timeout=200.0)
     result = _passthrough(response, not_found="Refresh not supported")
-    await platform_audit_service.log(
+    await _safe_audit(
         event_type=AuditEventType.CONFIGURATION,
         event_action="brain_orb_refresh",
         source="api",
@@ -345,11 +362,13 @@ async def put_brain_orb_postprocess(agent_name: OwnedAgentByName, request: Reque
     the saved prompt but skips execution)."""
     _require_write_enabled()
     body = await request.body()
-    if len(body) > _MAX_ACTION_BODY:
+    # A prompt config is small — cap at 64 KiB to match the agent-server (review F4),
+    # not the 1 MiB transcript cap, so an over-large body is rejected at the boundary.
+    if len(body) > _MAX_SCOPE_BODY:
         raise HTTPException(status_code=413, detail="Request too large")
     response = await _agent_request(agent_name, "PUT", "/api/brain-orb/postprocess", content=body, timeout=30.0)
     result = _passthrough(response, not_found="Brain Orb not available")
-    await platform_audit_service.log(
+    await _safe_audit(
         event_type=AuditEventType.CONFIGURATION,
         event_action="brain_orb_postprocess_config",
         source="api",

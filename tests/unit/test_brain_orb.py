@@ -641,6 +641,17 @@ def test_refresh_flag_off_404(client, monkeypatch):
     assert r.status_code == 404
 
 
+def test_refresh_write_flag_off_404(client, monkeypatch):
+    """refresh drives the agent action hook, so the write kill-switch must gate it too
+    (review F1) — not just BRAIN_ORB_ENABLED."""
+    monkeypatch.setattr(bo, "BRAIN_ORB_WRITE_ENABLED", False)
+    agent_req = AsyncMock()
+    with patch.object(bo, "_agent_request", agent_req):
+        r = client.post(_REFRESH_URL)
+    assert r.status_code == 404
+    agent_req.assert_not_called()   # gated before any agent call / hook exec
+
+
 def test_refresh_no_hook_404(client):
     with patch.object(bo, "get_agent_container", return_value=_running()), patch.object(
         bo, "agent_httpx_client", _fake_httpx(result=_resp(404))

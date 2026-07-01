@@ -1280,6 +1280,7 @@ const ORB_TOOLS={
 const VOICE_DISPLAY_TOOLS=new Set(['navigate_to_note','highlight_related_notes','surface_tensions','list_hubs','list_converged_topics']);
 let pinned=false;   // a deliberate highlight (node/hub/search click · domain · tension · voice) is pinned — hover won't wipe it until the user takes over
 addEventListener('message', e=>{
+  if(e.origin!==window.location.origin) return;   // same-origin only — ORB_TOOLS now includes owner-gated writes (capture_note/link_notes), so don't dispatch cross-origin
   const m=e.data; if(!m || m.type!=='orb-tool' || !e.source) return;
   let out;
   try{ const fn=ORB_TOOLS[m.name]; out = fn ? fn(m.args||{}) : {error:'unknown tool '+m.name}; }
