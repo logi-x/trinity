@@ -36,6 +36,16 @@ _SCOPE_HOOK = HOOK_DIR / "scope"     # POST: read JSON {tokens|mount|unmount} on
 # the hook runs a SCOPE-AWARE, READ-ONLY search over the vault (fails closed to
 # the core scope when none is mounted) and prints JSON results. No writes.
 _SEARCH_HOOK = HOOK_DIR / "search"   # POST: read JSON {query, ...} on stdin, print JSON {results|...}
+# #58 Phase 4a (trinity-enterprise#61) — owner-gated KB WRITES. The agent ships one
+# `action` hook that dispatches on the request's `action` field (read on stdin):
+#   {action:"list"}            → print {enabled, skills}  (the run_skill allow-list; 4b)
+#   {action:"capture", ...}    → write a note to the agent's inbox → {ok, title|...}
+#   {action:"link", from,to}   → connect two notes ([[wikilink]])   → {ok, already?}
+# The agent OWNS the write semantics + (in 4b) the allow-list/job lifecycle
+# (Invariant #8); Trinity only brokers + gates (owner-only, upstream). Absent hook
+# ⇒ 404 (the agent doesn't support writes), and the orb's action panel stays hidden.
+# run_skill / capture_transcript are Phase 4b (trinity-enterprise#66) — NOT handled here.
+_ACTION_HOOK = HOOK_DIR / "action"
 _HOME = Path("/home/developer")
 _MAX_HOOK_BODY = 64 * 1024           # scope/search requests are tiny (token list or query)
 _MAX_HOOK_OUT = 4 * 1024 * 1024      # hooks return small JSON; cap defensively
@@ -134,3 +144,31 @@ async def post_brain_orb_tool(request: Request):
         raise HTTPException(status_code=413, detail="Request too large")
     # 30s: a vault search is read-only and quick; no re-export.
     return await _run_hook(_SEARCH_HOOK, stdin=body, timeout=30)
+
+
+@router.get("/api/brain-orb/actions")
+async def get_brain_orb_actions():
+    """Report the agent's write-surface capability + skill allow-list (#58 Phase 4a).
+    Runs the `action` hook with `{action:"list"}` on stdin → `{enabled, skills}`. 404
+    when the agent ships no `action` hook (KB writes unsupported → the orb hides the
+    action panel). The owner gate lives upstream at the backend proxy."""
+    if not _hook_ready(_ACTION_HOOK):
+        raise HTTPException(status_code=404, detail="KB writes not supported")
+    return await _run_hook(_ACTION_HOOK, stdin=b'{"action":"list"}', timeout=30)
+
+
+@router.post("/api/brain-orb/action")
+async def post_brain_orb_action(request: Request):
+    """Run an owner-gated KB-write action (#58 Phase 4a). Pipes the request body (a
+    JSON `{action, ...}`) to `~/.trinity/brain-orb/action`, which performs the write
+    (capture a note / link two notes) and prints JSON. 404 when the agent ships no
+    `action` hook. The backend proxy gates this at `OwnedAgentByName` (owner/admin)
+    and enum-restricts `action` to capture/link in Phase 4a. run_skill + transcript
+    capture are Phase 4b (trinity-enterprise#66)."""
+    if not _hook_ready(_ACTION_HOOK):
+        raise HTTPException(status_code=404, detail="KB writes not supported")
+    body = await request.body()
+    if len(body) > _MAX_HOOK_BODY:
+        raise HTTPException(status_code=413, detail="Request too large")
+    # 60s: a note write / link is quick; no re-export or headless run in 4a.
+    return await _run_hook(_ACTION_HOOK, stdin=body, timeout=60)

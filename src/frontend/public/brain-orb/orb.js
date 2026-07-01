@@ -24,7 +24,7 @@ const TRINITY_EMBED = (() => {
     window.addEventListener('message', e => {
       if (e.origin !== window.location.origin) return;        // same-origin only
       const d = e.data; if (!d || d.type !== 'brain-orb:init') return;
-      finish({ agentName: d.agentName, apiBase: d.apiBase || '', authToken: d.authToken || '', voiceAvailable: !!d.voiceAvailable });
+      finish({ agentName: d.agentName, apiBase: d.apiBase || '', authToken: d.authToken || '', voiceAvailable: !!d.voiceAvailable, writeAvailable: !!d.writeAvailable });
     });
     try { window.parent.postMessage({ type: 'brain-orb:ready' }, window.location.origin); } catch (_) {}
     setTimeout(() => finish(null), 8000);                     // don't hang if no host answers
@@ -38,6 +38,7 @@ const TRINITY_EMBED = (() => {
 let ORB_HEADERS = {};
 let SCOPE_ENABLED = false;
 let VOICE_AVAILABLE = false;   // #60 Phase 3 — gates the client-held voice tile
+let WRITE_AVAILABLE = false;   // #61 Phase 4a — platform flag for the KB-write surface
 
 async function loadData(){
   if (window.AGENT_DATA) return window.AGENT_DATA;          // file:// safe
@@ -51,6 +52,10 @@ async function loadData(){
     // #60 Phase 3: un-hide the voice tile only when the host says voice is available
     // (platform flag + agent capability). orb-trinity.css keeps it hidden otherwise.
     if (ctx.voiceAvailable) { VOICE_AVAILABLE = true; try { document.body.classList.add('brain-orb-voice'); } catch(_){} }
+    // #61 Phase 4a: the KB-write surface is a platform flag here; initActions() only
+    // un-hides the action panel (body.brain-orb-write) after the broker confirms the
+    // caller owns the agent AND the agent ships a write hook (GET /actions → 200).
+    if (ctx.writeAvailable) { WRITE_AVAILABLE = true; }
     const r = await fetch(VOICE_PROXY + '/data', { headers: ORB_HEADERS });
     if (!r.ok) throw new Error('brain-orb data ' + r.status);
     return await r.json();
@@ -1206,6 +1211,15 @@ const ORB_TOOLS={
               note:'recorded to 00-Inbox; it will be wired into the graph at the next reindex — not connected yet'}; }
     return {error:(r&&r.error)||'capture failed'};
   },
+  // #61 Phase 4a — voice-triggered link (owner sessions only; the write tools are in the
+  // locked manifest only when the minting user owns the agent). Connects two notes by title.
+  async link_notes({source, target}){
+    if(!ACTIONS.enabled) return {error:'the action backend is not available'};
+    if(!source||!target) return {error:'need both a source and a target note'};
+    const r=await postAction('link',{from:source, to:target});
+    if(r&&r.ok) return {ok:true, linked:[source, target], already:!!r.already};
+    return {error:(r&&r.error)||'link failed'};
+  },
   // ---- scope tools: bring a book/company/research INTO view + into what the voice can search ----
   list_scopes(){ return {active:SCOPE_ACTIVE,
     available:SCOPE_AVAIL.map(s=>({token:s.token, label:s.label, kind:s.kind,
@@ -1403,26 +1417,31 @@ function applyData(data){
   setState('idle');
 }
 
-/* ============================ KB actions (capture · connect · run skill) ============================ */
-// All write/exec goes through the voice backend (proxy_server.py), token-gated. If the backend
-// isn't reachable (e.g. file://), actions stay disabled and the orb behaves exactly as before.
-const ACTIONS={enabled:false, token:null, skills:[]};
+/* ============================ KB actions (capture · connect) — #61 Phase 4a ============================ */
+// Owner-gated writes via the Trinity broker (POST /api/agents/{name}/brain-orb/action),
+// authed with the platform JWT (ORB_HEADERS) — NOT the old localhost proxy / X-Orb-Token.
+// The panel un-hides (body.brain-orb-write) only after the broker confirms owner + flag +
+// agent write hook. run_skill (exec) + transcript capture are Phase 4b (trinity-enterprise#66).
+const ACTIONS={enabled:false, skills:[]};
+// Fresh idempotency key per write attempt (Invariant #18): a client retry dedups at the
+// broker instead of double-writing. randomUUID is available same-origin (HTTPS/localhost).
+function _idemKey(){ try{ return crypto.randomUUID(); }catch(_){ return 'k'+Date.now()+Math.random().toString(36).slice(2); } }
 async function initActions(){
+  if(!WRITE_AVAILABLE || !VOICE_PROXY){ ACTIONS.enabled=false; return; }   // platform flag off / standalone
   try{
-    const r=await fetch(VOICE_PROXY+'/session',{signal:AbortSignal.timeout(2500)});
-    const d=await r.json();
-    if(d&&d.token){ ACTIONS.enabled=true; ACTIONS.token=d.token; ACTIONS.skills=d.skills||[]; }
-  }catch(e){ ACTIONS.enabled=false; }
-  const sb=$('skillBtns');
-  if(sb){ sb.innerHTML=ACTIONS.skills.map(s=>`<span class="sk" data-skill="${s}">${s}</span>`).join('');
-    sb.querySelectorAll('[data-skill]').forEach(b=>b.onclick=()=>runSkill(b.dataset.skill)); }
+    const r=await fetch(VOICE_PROXY+'/actions',{headers:ORB_HEADERS,signal:AbortSignal.timeout(6000)});
+    if(r.ok){ ACTIONS.enabled=true; }   // 200 ⇒ owner + write flag + agent ships the action hook
+  }catch(e){ ACTIONS.enabled=false; }   // 403 (non-owner) / 404 (flag off / no hook) / offline → stay hidden
+  ACTIONS.skills=[];                     // run_skill deferred to Phase 4b (#66) — no skill buttons in 4a
+  const sb=$('skillBtns'); if(sb) sb.innerHTML='';
+  if(ACTIONS.enabled){ try{ document.body.classList.add('brain-orb-write'); }catch(_){} }  // reveal capture/connect
 }
 async function postAction(type,args){
-  if(!ACTIONS.enabled){ toast('actions need the brain-orb servers (run /brain-orb)'); return {error:'no backend'}; }
+  if(!ACTIONS.enabled){ toast('KB writes are not available for this agent'); return {error:'no backend'}; }
   try{
     const r=await fetch(VOICE_PROXY+'/action',{method:'POST',
-      headers:{'Content-Type':'application/json','X-Orb-Token':ACTIONS.token},
-      body:JSON.stringify({type,args})});
+      headers:{'Content-Type':'application/json','Idempotency-Key':_idemKey(),...ORB_HEADERS},
+      body:JSON.stringify({action:type, ...(args||{})})});
     return await r.json();
   }catch(e){ return {error:String(e&&e.message||e)}; }
 }
@@ -1436,11 +1455,16 @@ function toggleActions(force){
 $('actClose')&&($('actClose').onclick=()=>toggleActions(false));
 
 /* --- capture a thought -> a note in 00-Inbox (the note lands now; it joins the graph at the next reindex) --- */
+// Re-entrancy guard: each postAction mints a fresh Idempotency-Key, so a double-click
+// would otherwise write two notes. Bounce the second click while one is in flight.
+let _capInFlight=false;
 async function doCapture(){
+  if(_capInFlight) return;
   const ta=$('capInput'); const body=(ta.value||'').trim();
   if(!body){ toast('type a thought first'); return; }
+  _capInFlight=true;
   setActStatus('capturing…',true);
-  const r=await postAction('capture',{body});
+  let r; try{ r=await postAction('capture',{body}); } finally { _capInFlight=false; }
   if(r&&r.ok){ ta.value=''; setActStatus(''); toggleActions(false);
     toast('captured → '+(r.title||'inbox').slice(0,40));
     addLiveNote(r.title||body.split('\n')[0].slice(0,60), body);   // persistent, visible all session
@@ -1453,7 +1477,11 @@ $('capInput')&&$('capInput').addEventListener('keydown',e=>{
   e.stopPropagation();   // typing here must not fire orb hotkeys
 });
 
-/* --- run an allow-listed skill headlessly; poll the job, then reload to surface changes --- */
+/* --- run an allow-listed skill headlessly; poll the job, then reload to surface changes ---
+   Phase 4b (trinity-enterprise#66): DEFERRED. Kept for the follow-up but currently INERT —
+   ACTIONS.skills is [] (no skill buttons) and the voice manifest declares no run_skill tool,
+   so this is never invoked; the broker /action route rejects action=run_skill (400) and there
+   is no /job route in 4a. Wired up with the detached-execution rework in #66. */
 let jobTimer=null;
 async function runSkill(skill,args,reload=true){
   const r=await postAction('run_skill',{skill,args:args||''});

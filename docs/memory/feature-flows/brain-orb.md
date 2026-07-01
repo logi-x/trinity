@@ -2,7 +2,7 @@
 
 > **Type**: feature · P2 · `theme-ui-ux` · first child of the tighter-Cornelius-integration epic
 >
-> **One-line**: Capability-gated per-agent page that renders a Cornelius-class agent's live 3D knowledge-graph orb from data the agent produces in its own container, with live scope control and a client-held voice tile. **Shipped: Phase 1 (static render + read path) + Phase 2 (scope mount/unmount → re-export → live rebuild) + Phase 3 (client-held Gemini Live voice + read-only KB search).** KB-write actions, transcript capture, and headless-skill injection are deferred to later epic children.
+> **One-line**: Capability-gated per-agent page that renders a Cornelius-class agent's live 3D knowledge-graph orb from data the agent produces in its own container, with live scope control and a client-held voice tile. **Shipped: Phase 1 (static render + read path) + Phase 2 (scope mount/unmount → re-export → live rebuild) + Phase 3 (client-held Gemini Live voice + read-only KB search) + Phase 4a (owner-gated KB-write actions: capture + link).** `run_skill` (headless exec), automatic transcript capture, and headless-skill injection are deferred to **Phase 4b (trinity-enterprise#66)**.
 
 ## Scope (and what is deferred)
 
@@ -11,8 +11,9 @@ The full issue describes voice (client-held Gemini Live), a scope mount→re-exp
 - **Phase 1 — static render + read path.** First-party CSP-clean orb assets, gated route/tab, read-only `data.json` proxy.
 - **Phase 2 — live scope control.** Button-driven scope mount/unmount → agent re-export → live in-place rebuild, via owner-gated broker + agent convention hooks. No Gemini/voice.
 - **Phase 3 — client-held voice tile + read-only KB search.** The browser holds its own Gemini Live socket (ephemeral-token broker); visual tools + scope-by-voice run in-browser; a read-only `search` hook backs whole-vault lookup. KB WRITES stay off.
+- **Phase 4a — owner-gated KB-write actions (capture + link).** Owner/admin-only capture-a-note and link-two-notes via a new broker `POST /action` route → an agent `~/.trinity/brain-orb/action` convention hook. Behind its own `BRAIN_ORB_WRITE_ENABLED` kill-switch, rate-limited, audit-logged, `Idempotency-Key`-deduped. Voice owners get capture/link folded into the locked manifest.
 
-**Deferred to epic children:** KB write actions (capture/link/run-skill) · automatic transcript-capture pipeline · headless skill injection.
+**Deferred to Phase 4b (trinity-enterprise#66):** `run_skill` (headless `claude -p` exec) · automatic transcript-capture pipeline · headless skill injection. These carry the exec/injection risk + an unproven Gemini-Live-transcription dependency and were split out during `/autoplan` (two independent reviews); 4b must inherit the #1083 detached-execution subsystem + a template.yaml allow-list ceiling + a transcription spike.
 
 ## Phase 2 — live scope control
 
@@ -76,6 +77,39 @@ Gemini toolCall → voice iframe → postMessage 'orb-tool' → orb.js ORB_TOOLS
 
 **Residual /verify-only risk (documented):** the exact ephemeral-token **browser** handshake (`BidiGenerateContentConstrained` + `access_token=` + v1alpha) is only verifiable against the live Gemini API from a real browser — mirror the SDK's `live.py` Constrained path (setup = `{model}` only, config deleted). Non-blocking function calling for the 180s scope re-export (now available on 1.63) should be confirmed in the same spike. A real agent must ship an executable `~/.trinity/brain-orb/search` hook.
 
+## Phase 4a — owner-gated KB-write actions (capture + link, #61)
+
+The orb's action panel (`#actions`, the `A` key) and the inspector "connect" affordance — hidden since Phase 1 — are un-hidden and rewired from the dead standalone voice-proxy (`VOICE_PROXY+'/session'|'/action'` + `X-Orb-Token`) to the platform broker with Bearer JWT. Two write verbs: **capture** (a note into the agent's inbox) and **link** (`[[wikilink]]` two notes). `run_skill` (exec) + transcript capture are Phase 4b (#66) — deliberately out.
+
+```
+orb action (capture / link, or a voice capture_note/link_notes tool call)
+  orb.js postAction(type,args)
+    POST /api/agents/{name}/brain-orb/action   (OwnedAgentByName; Bearer; Idempotency-Key: <uuid>)
+      body {action:"capture"|"link", ...}
+    → routers/agent_brain_orb.py:
+        _require_write_enabled()            # BRAIN_ORB_WRITE_ENABLED (distinct kill-switch)
+        enum-validate action ∈ {capture, link}   # run_skill/capture_transcript → 400 (never forwarded)
+        idempotency begin(scope=agent:{name}, key=action:{Idempotency-Key})   # replay → snapshot / 409 in-flight
+        rate_limiter.enforce(user,agent,action)  # 429 → release the claim
+        _agent_request → agent-server POST /api/brain-orb/action
+            → _run_hook(~/.trinity/brain-orb/action, stdin=body)   # agent owns the write (Inv #8)
+        idempotency complete(snapshot)  ·  platform_audit_service.log(brain_orb_capture|link)
+  ← orb reflects the write (addLiveNote / addLiveEdge); joins the graph at the next reindex
+
+orb panel open → initActions()
+  GET /api/agents/{name}/brain-orb/actions   (OwnedAgentByName; Bearer)
+    → agent-server GET /api/brain-orb/actions → _run_hook(action, {action:"list"}) → {enabled, skills}
+  200 ⇒ body.brain-orb-write added → panel revealed; 403 (non-owner) / 404 (flag off / no hook) ⇒ stays hidden
+```
+
+**Auth boundary (airtight):** every write route is `OwnedAgentByName` (owner/admin) — a shared user gets 403 and the orb hides the panel. The voice-token mint stays `AuthorizedAgentByName` (shared users may voice-chat), but the mint route computes `can_write = BRAIN_ORB_WRITE_ENABLED and db.can_user_share_agent(user, agent)` and only then folds the `capture_note`/`link_notes` write tools into the **locked** manifest — so a shared-user session gets the read-only Phase-3 manifest, and even a crafted call hits the owner-gated `/action` route. The manifest is a UX affordance; the backend gate is the security boundary.
+
+**Idempotency (Invariant #18, not #1084):** these are user→backend producer POSTs with no `execution_id`, so the effect_guard (`effect:{execution_id}`-scoped) doesn't fit; the trigger-boundary `Idempotency-Key` path is used instead, with the key folded per action verb (`brain_orb_action:{action}:{key}`) so a reused client key can't replay a different verb's snapshot. Dedups the HTTP POST (double-click / retry) — exactly-once at the KB sink remains the agent hook's responsibility.
+
+**Agent convention (Invariant #8):** the agent ships one executable `~/.trinity/brain-orb/action` hook (a fourth sibling next to `scopes`/`scope`/`search`) that dispatches on the request's `action` field (`list` → allow-list, `capture`, `link`) and owns the write semantics; Trinity runs it via the same hardened `_run_hook` and 404s when absent. The backend enum-restricts the verb before forwarding.
+
+**Kill-switch:** `BRAIN_ORB_WRITE_ENABLED` (env, default OFF) — distinct from `BRAIN_ORB_ENABLED` so writes can be disabled without downing the read path or voice tile. Surfaced as `brain_orb_write_available` in `GET /api/settings/feature-flags`; the host relays it to the orb (`writeAvailable`), which only attempts `initActions` when on.
+
 ## Why first-party + iframe (the CSP nuance, #979)
 
 The orb is a vanilla Three.js page with an inline ES-module, CDN deps, and a `localhost:8770` voice proxy. Prod CSP is `script-src 'self'; font-src 'self'; frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN`. #979 only bit because it iframed **agent-origin** content with **inline** scripts. The resolution:
@@ -131,10 +165,11 @@ The data route uses standard `AuthorizedAgentByName` Bearer auth like every othe
 | Route | `src/frontend/src/router/index.js` (`/agents/:name/brain`) |
 | Flag (FE) | `src/frontend/src/stores/sessions.js` (`brainOrbAvailable`, `brainOrbVoiceAvailable`) |
 | Tab + capability | `src/frontend/src/views/AgentDetail.vue` (`visibleTabs`, `checkBrainOrbCapability`) |
-| Backend proxy | `src/backend/routers/agent_brain_orb.py` (data/scopes/scope + **voice-token/tool**) |
-| Mint service (Phase 3) | `src/backend/services/brain_orb_voice_service.py` (v1alpha ephemeral token + locked tool manifest) |
-| Flag (BE) | `src/backend/config.py` (`BRAIN_ORB_ENABLED`, `BRAIN_ORB_VOICE_ENABLED`), `src/backend/routers/settings.py` |
-| Agent-server | `docker/base-image/agent_server/routers/brain_orb.py` (data/scopes/scope + **search** hook) |
+| Backend proxy | `src/backend/routers/agent_brain_orb.py` (data/scopes/scope + voice-token/tool + **actions/action** — Phase 4a) |
+| Mint service (Phase 3/4a) | `src/backend/services/brain_orb_voice_service.py` (v1alpha ephemeral token + locked tool manifest; **`can_write` → owner-only capture/link tools**) |
+| Flag (BE) | `src/backend/config.py` (`BRAIN_ORB_ENABLED`, `BRAIN_ORB_VOICE_ENABLED`, **`BRAIN_ORB_WRITE_ENABLED`**), `src/backend/routers/settings.py` |
+| Agent-server | `docker/base-image/agent_server/routers/brain_orb.py` (data/scopes/scope + search + **action** hook — Phase 4a) |
+| Flag (FE) | `src/frontend/src/stores/sessions.js` (`brainOrbAvailable`, `brainOrbVoiceAvailable`, **`brainOrbWriteAvailable`**) |
 | Tests | `tests/unit/test_brain_orb.py` |
 
 ## Invariants honored

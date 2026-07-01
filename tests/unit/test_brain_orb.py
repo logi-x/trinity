@@ -78,12 +78,16 @@ def client(monkeypatch):
     # Read routes use AuthorizedAgentByName; the mutating /scope uses OwnedAgentByName.
     app.dependency_overrides[get_authorized_agent_by_name] = lambda: _AGENT
     app.dependency_overrides[get_owned_agent_by_name] = lambda: _AGENT
-    app.dependency_overrides[get_current_user] = lambda: types.SimpleNamespace(id=7, email="u@example.com")
+    app.dependency_overrides[get_current_user] = lambda: types.SimpleNamespace(id=7, username="u", email="u@example.com")
     # Flags ON by default; individual tests flip them off. container_reload is async.
     monkeypatch.setattr(bo, "BRAIN_ORB_ENABLED", True)
     monkeypatch.setattr(bo, "BRAIN_ORB_VOICE_ENABLED", True)   # #60 Phase 3
+    monkeypatch.setattr(bo, "BRAIN_ORB_WRITE_ENABLED", True)   # #61 Phase 4a
     monkeypatch.setattr(bo, "GEMINI_API_KEY", "test-key")      # #60 Phase 3
     monkeypatch.setattr(bo, "container_reload", AsyncMock())
+    # #61 Phase 4a: the voice-token route resolves owner-ness for can_write. Default
+    # to owner=True (fixture caller is the owner); shared-user tests override to False.
+    monkeypatch.setattr(bo.db, "can_user_share_agent", lambda *a, **k: True)
     return TestClient(app, raise_server_exceptions=True)
 
 
@@ -356,6 +360,7 @@ def agent_env(tmp_path, monkeypatch):
     monkeypatch.setattr(asbo, "_SCOPES_HOOK", hooks / "scopes")
     monkeypatch.setattr(asbo, "_SCOPE_HOOK", hooks / "scope")
     monkeypatch.setattr(asbo, "_SEARCH_HOOK", hooks / "search")   # #60 Phase 3
+    monkeypatch.setattr(asbo, "_ACTION_HOOK", hooks / "action")   # #61 Phase 4a
     monkeypatch.setattr(asbo, "_HOME", tmp_path)   # subprocess cwd must exist on the test host
     app = FastAPI()
     app.include_router(asbo.router)
@@ -364,7 +369,7 @@ def agent_env(tmp_path, monkeypatch):
     return types.SimpleNamespace(
         client=TestClient(app), asbo=asbo, data=tmp_path / "data.json",
         scopes_hook=hooks / "scopes", scope_hook=hooks / "scope",
-        search_hook=hooks / "search",
+        search_hook=hooks / "search", action_hook=hooks / "action",
     )
 
 
@@ -497,3 +502,281 @@ def test_mint_service_uses_v1alpha_and_locks_config(monkeypatch):
     # Token surfaced under `ephemeral_token`, never `token` (F1).
     assert out["ephemeral_token"] == "auth_tokens/xyz"
     assert "token" not in out
+
+
+# ==========================================================================
+# Phase 4a — owner-gated KB writes (capture + link) — trinity-enterprise#61
+# ==========================================================================
+
+_ACTIONS_URL = f"/api/agents/{_AGENT}/brain-orb/actions"
+_ACTION_URL = f"/api/agents/{_AGENT}/brain-orb/action"
+
+
+def _deny_owner(client):
+    """Flip the OwnedAgentByName gate to 403 for one test (function-scoped app)."""
+    def _raise():
+        raise HTTPException(status_code=403, detail="Owner access required")
+    client.app.dependency_overrides[get_owned_agent_by_name] = _raise
+
+
+# --- backend /actions (read the write-surface capability) ------------------
+
+def test_actions_get_success_passes_through(client):
+    payload = b'{"enabled":true,"skills":[]}'
+    with patch.object(bo, "get_agent_container", return_value=_running()), patch.object(
+        bo, "agent_httpx_client", _fake_httpx(result=_resp(200, payload))
+    ):
+        r = client.get(_ACTIONS_URL)
+    assert r.status_code == 200
+    assert r.json() == {"enabled": True, "skills": []}
+
+
+def test_actions_write_flag_off_404(client, monkeypatch):
+    """Distinct kill-switch: BRAIN_ORB_WRITE_ENABLED off ⇒ 404 even though the base
+    render flag is on (writes disabled without downing read/voice)."""
+    monkeypatch.setattr(bo, "BRAIN_ORB_WRITE_ENABLED", False)
+    with patch.object(bo, "get_agent_container", return_value=_running()):
+        r = client.get(_ACTIONS_URL)
+    assert r.status_code == 404
+    assert "not enabled" in r.json()["detail"]
+
+
+def test_actions_no_hook_maps_to_404(client):
+    with patch.object(bo, "get_agent_container", return_value=_running()), patch.object(
+        bo, "agent_httpx_client", _fake_httpx(result=_resp(404))
+    ):
+        r = client.get(_ACTIONS_URL)
+    assert r.status_code == 404
+
+
+def test_actions_owner_gate_403(client):
+    _deny_owner(client)
+    r = client.get(_ACTIONS_URL)
+    assert r.status_code == 403
+
+
+# --- backend /action (capture + link) --------------------------------------
+
+def test_action_capture_success_and_audited(client):
+    payload = b'{"ok":true,"title":"a thought","path":"00-Inbox/a.md"}'
+    audit = AsyncMock()
+    with patch.object(bo, "_agent_request", AsyncMock(return_value=_resp(200, payload))), patch.object(
+        bo.platform_audit_service, "log", audit
+    ):
+        r = client.post(_ACTION_URL, json={"action": "capture", "body": "a thought"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    audit.assert_awaited_once()
+    assert audit.await_args.kwargs["event_action"] == "brain_orb_capture"
+
+
+def test_action_link_success(client):
+    payload = b'{"ok":true,"already":false}'
+    with patch.object(bo, "_agent_request", AsyncMock(return_value=_resp(200, payload))), patch.object(
+        bo.platform_audit_service, "log", AsyncMock()
+    ):
+        r = client.post(_ACTION_URL, json={"action": "link", "from": "A", "to": "B"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_action_unsupported_verb_rejected_400(client):
+    """run_skill / capture_transcript are Phase 4b (#66) — rejected at the boundary,
+    never forwarded to the agent hook."""
+    agent_req = AsyncMock()
+    for verb in ("run_skill", "capture_transcript", "delete", ""):
+        with patch.object(bo, "_agent_request", agent_req):
+            r = client.post(_ACTION_URL, json={"action": verb, "skill": "x"})
+        assert r.status_code == 400, verb
+    agent_req.assert_not_called()
+
+
+def test_action_write_flag_off_404(client, monkeypatch):
+    monkeypatch.setattr(bo, "BRAIN_ORB_WRITE_ENABLED", False)
+    r = client.post(_ACTION_URL, json={"action": "capture", "body": "x"})
+    assert r.status_code == 404
+
+
+def test_action_body_too_large_413(client):
+    # > 64 KiB raw body — rejected before any agent call / parse.
+    r = client.post(_ACTION_URL, json={"action": "capture", "body": "x" * 70_000})
+    assert r.status_code == 413
+
+
+def test_action_invalid_json_400(client):
+    r = client.post(_ACTION_URL, data=b"{not json",
+                    headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+
+
+def test_action_owner_gate_403(client):
+    _deny_owner(client)
+    agent_req = AsyncMock()
+    with patch.object(bo, "_agent_request", agent_req):
+        r = client.post(_ACTION_URL, json={"action": "capture", "body": "x"})
+    assert r.status_code == 403
+    agent_req.assert_not_called()   # owner gate fires before any forward
+
+
+def test_action_rate_limited_429_and_claim_released(client):
+    """Over the per-(user,agent,action) budget → 429; the in-flight idempotency claim
+    is released (fail) so a later retry isn't wedged."""
+    from fastapi import HTTPException as _HE
+    agent_req = AsyncMock()
+    with patch.object(bo, "_agent_request", agent_req), patch.object(
+        bo.rate_limiter, "enforce", side_effect=_HE(status_code=429, detail="slow")
+    ), patch.object(bo.idempotency_service, "fail") as fail:
+        r = client.post(_ACTION_URL, json={"action": "capture", "body": "x"},
+                        headers={"Idempotency-Key": "k1"})
+    assert r.status_code == 429
+    agent_req.assert_not_called()
+    fail.assert_called_once()   # claim released on the 429 path
+
+
+def test_action_idempotency_replay_forwards_once(client):
+    """A re-POST with the same key replays the stored snapshot without a second write."""
+    from services.idempotency_service import IdempotencyDecision
+    fresh = IdempotencyDecision(enabled=True, replay=False, in_flight=False,
+                                scope="agent:cornelius", key="k")
+    replay = IdempotencyDecision(enabled=True, replay=True, in_flight=False,
+                                 scope="agent:cornelius", key="k",
+                                 snapshot={"ok": True, "title": "note"})
+    agent_req = AsyncMock(return_value=_resp(200, b'{"ok":true,"title":"note"}'))
+    with patch.object(bo, "_agent_request", agent_req), patch.object(
+        bo.idempotency_service, "begin", side_effect=[fresh, replay]
+    ), patch.object(bo.idempotency_service, "complete") as complete, patch.object(
+        bo.platform_audit_service, "log", AsyncMock()
+    ):
+        r1 = client.post(_ACTION_URL, json={"action": "capture", "body": "hi"},
+                         headers={"Idempotency-Key": "k"})
+        r2 = client.post(_ACTION_URL, json={"action": "capture", "body": "hi"},
+                         headers={"Idempotency-Key": "k"})
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert agent_req.call_count == 1                    # forwarded exactly once
+    assert complete.call_count == 1                     # completed only the fresh claim
+    assert r2.headers.get("x-idempotent-replay") == "true"
+    assert r2.json() == {"ok": True, "title": "note"}
+
+
+def test_action_idempotency_in_flight_409(client):
+    """A concurrent duplicate (in-flight claim) → 409, never a silent second write."""
+    from services.idempotency_service import IdempotencyDecision
+    in_flight = IdempotencyDecision(enabled=True, replay=True, in_flight=True,
+                                    scope="agent:cornelius", key="k")
+    agent_req = AsyncMock()
+    with patch.object(bo, "_agent_request", agent_req), patch.object(
+        bo.idempotency_service, "begin", return_value=in_flight
+    ):
+        r = client.post(_ACTION_URL, json={"action": "capture", "body": "x"},
+                        headers={"Idempotency-Key": "k"})
+    assert r.status_code == 409
+    agent_req.assert_not_called()
+
+
+# --- voice manifest: owner-only write tools (#61 Phase 4a) -----------------
+
+def test_mint_service_adds_write_tools_when_can_write(monkeypatch):
+    """can_write=True folds capture_note + link_notes into the locked manifest;
+    run_skill stays absent (Phase 4b)."""
+    import services.brain_orb_voice_service as svc
+    captured = {}
+
+    class _FakeAuthTokens:
+        def create(self, *, config):
+            captured["config"] = config
+            return types.SimpleNamespace(name="auth_tokens/w")
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            self.auth_tokens = _FakeAuthTokens()
+
+    monkeypatch.setattr(svc, "_client", None)
+    monkeypatch.setattr(svc, "GEMINI_API_KEY", "k")
+    monkeypatch.setattr(svc.genai, "Client", _FakeClient)
+
+    out = asyncio.run(svc.mint_voice_token("cornelius", voice_name="Kore",
+                                           agent_prompt=None, can_write=True))
+    cfg = captured["config"]
+    names = {fd.name for t in cfg.live_connect_constraints.config.tools for fd in t.function_declarations}
+    assert {"capture_note", "link_notes"} <= names   # write tools present for owners
+    assert "run_skill" not in names                   # exec deferred to Phase 4b (#66)
+    assert "mount_scope" in names                      # read/scope tools still there
+    assert "capture_note" in out["tools"]
+
+
+def test_voice_token_shared_user_gets_readonly_manifest(client):
+    """A shared (non-owner) user's mint must pass can_write=False (no write tools),
+    even though the mint route itself is AuthorizedAgentByName."""
+    mint = AsyncMock(return_value={"ephemeral_token": "auth_tokens/x", "tools": []})
+    with patch.object(bo.db, "get_voice_name", return_value="Kore"), patch.object(
+        bo.db, "get_voice_system_prompt", return_value=None
+    ), patch.object(bo.db, "can_user_share_agent", return_value=False), patch.object(
+        bo.rate_limiter, "enforce"
+    ), patch.object(bo.brain_orb_voice_service, "mint_voice_token", mint):
+        r = client.post(_VOICE_TOKEN_URL)
+    assert r.status_code == 200
+    assert mint.await_args.kwargs["can_write"] is False
+
+
+def test_voice_token_owner_gets_write_manifest(client):
+    """An owner's mint passes can_write=True (write tools folded into the manifest)."""
+    mint = AsyncMock(return_value={"ephemeral_token": "auth_tokens/x", "tools": []})
+    with patch.object(bo.db, "get_voice_name", return_value="Kore"), patch.object(
+        bo.db, "get_voice_system_prompt", return_value=None
+    ), patch.object(bo.db, "can_user_share_agent", return_value=True), patch.object(
+        bo.rate_limiter, "enforce"
+    ), patch.object(bo.brain_orb_voice_service, "mint_voice_token", mint):
+        r = client.post(_VOICE_TOKEN_URL)
+    assert r.status_code == 200
+    assert mint.await_args.kwargs["can_write"] is True
+
+
+def test_voice_token_write_flag_off_forces_readonly(client, monkeypatch):
+    """Even an owner gets can_write=False when the write flag is off."""
+    monkeypatch.setattr(bo, "BRAIN_ORB_WRITE_ENABLED", False)
+    mint = AsyncMock(return_value={"ephemeral_token": "auth_tokens/x", "tools": []})
+    with patch.object(bo.db, "get_voice_name", return_value="Kore"), patch.object(
+        bo.db, "get_voice_system_prompt", return_value=None
+    ), patch.object(bo.db, "can_user_share_agent", return_value=True), patch.object(
+        bo.rate_limiter, "enforce"
+    ), patch.object(bo.brain_orb_voice_service, "mint_voice_token", mint):
+        r = client.post(_VOICE_TOKEN_URL)
+    assert r.status_code == 200
+    assert mint.await_args.kwargs["can_write"] is False
+
+
+# --- agent-server: action hook (list + capture/link forward) ---------------
+
+def test_agent_server_actions_list(agent_env):
+    _write_hook(agent_env.action_hook,
+                '#!/bin/sh\ncat >/dev/null\necho \'{"enabled":true,"skills":["find-connections"]}\'\n')
+    r = agent_env.client.get("/api/brain-orb/actions")
+    assert r.status_code == 200
+    assert r.json()["enabled"] is True
+
+
+def test_agent_server_actions_absent_404(agent_env):
+    r = agent_env.client.get("/api/brain-orb/actions")
+    assert r.status_code == 404
+
+
+def test_agent_server_action_forwards_stdin(agent_env):
+    _write_hook(agent_env.action_hook,
+                '#!/bin/sh\nbody=$(cat)\necho "{\\"ok\\":true,\\"received\\":$body}"\n')
+    r = agent_env.client.post("/api/brain-orb/action", json={"action": "capture", "body": "hi"})
+    assert r.status_code == 200
+    out = r.json()
+    assert out["ok"] is True
+    assert out["received"] == {"action": "capture", "body": "hi"}
+
+
+def test_agent_server_action_absent_404(agent_env):
+    r = agent_env.client.post("/api/brain-orb/action", json={"action": "capture", "body": "x"})
+    assert r.status_code == 404
+
+
+def test_agent_server_action_body_too_large_413(agent_env):
+    _write_hook(agent_env.action_hook, '#!/bin/sh\ncat >/dev/null\necho "{}"\n')
+    r = agent_env.client.post("/api/brain-orb/action",
+                              json={"action": "capture", "body": "x" * 70_000})
+    assert r.status_code == 413

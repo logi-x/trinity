@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "date": "2026-07-01",
+  "mode": "diff",
+  "scope": "brain-orb Phase 4a KB-write (capture + link)",
+  "branch": "feature/61-brain-orb-actions",
+  "base": "feature/60-brain-orb-voice",
+  "issue": "abilityai/trinity-enterprise#61",
+  "phases_run": [0, 1, 2, 5, 6, 7, 9, 10, 12, 13, 14],
+  "attack_surface": {
+    "new_endpoints": [
+      "GET /api/agents/{name}/brain-orb/actions (OwnedAgentByName)",
+      "POST /api/agents/{name}/brain-orb/action (OwnedAgentByName)",
+      "agent-server GET/POST /api/brain-orb/action[s] (AgentAuthMiddleware #1159)"
+    ],
+    "new_flags": ["BRAIN_ORB_WRITE_ENABLED (default OFF)"],
+    "new_voice_tools": ["capture_note", "link_notes (owner-only locked manifest)"]
+  },
+  "findings": [],
+  "targeted_concerns": [
+    {"id": 1, "concern": "owner-gate airtightness incl. voice manifest", "verdict": "SAFE", "confidence": 9},
+    {"id": 2, "concern": "action-enum boundary (run_skill/capture_transcript -> 400)", "verdict": "SAFE", "confidence": 9},
+    {"id": 3, "concern": "injection into _run_hook/claude (stdin-only, no shell)", "verdict": "SAFE", "confidence": 9},
+    {"id": 4, "concern": "BRAIN_ORB_WRITE_ENABLED bypass", "verdict": "SAFE", "confidence": 9},
+    {"id": 5, "concern": "idempotency cross-verb snapshot replay", "verdict": "SAFE", "confidence": 9}
+  ],
+  "totals": {"critical": 0, "high": 0, "medium": 0, "low": 0, "tentative": 0},
+  "trend": "clean diff scan; no findings at the 8/10 daily gate",
+  "notes": "run_skill + transcript pipeline deferred to trinity-enterprise#66 (out of scope, not flagged as missing)."
+}
