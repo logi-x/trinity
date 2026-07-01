@@ -641,10 +641,15 @@ function renderNoteInto(el, md){
     `<a class="wl" data-target="${_escAttr(target.trim())}">${_escHtml((alias||target).trim())}</a>`);
   let html;
   if(window.marked && marked.parse){
-    try{ html=marked.parse(s,{breaks:true,gfm:true,mangle:false,headerIds:false}); if(window.DOMPurify) html=DOMPurify.sanitize(html); }
+    try{ html=marked.parse(s,{breaks:true,gfm:true,mangle:false,headerIds:false}); }
     catch(e){ html=s.replace(/\n/g,'<br>'); }
   } else { html=s.replace(/\n/g,'<br>'); }      // graceful fallback if the CDN didn't load
-  el.innerHTML=html;
+  // Always sanitize before it reaches the DOM — every path above (marked output
+  // AND the raw-markdown fallbacks) is routed through DOMPurify. DOMPurify is
+  // vendored locally so it's effectively always present; if it somehow failed to
+  // load, degrade to plain text rather than inject unsanitized markup.
+  if(window.DOMPurify){ el.innerHTML=DOMPurify.sanitize(html); }
+  else { el.textContent=md; }
   // wire wikilink jumps
   el.querySelectorAll('a.wl').forEach(a=>{
     const base=(a.dataset.target||'').toLowerCase().trim();
