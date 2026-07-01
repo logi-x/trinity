@@ -101,9 +101,11 @@ function sendInit() {
       agentName,
       apiBase: '',                 // same-origin — relative /api paths
       authToken: authStore.token || '',
-      // #60 Phase 3: gate the client-held voice tile. The orb un-hides it only
-      // when the platform voice flag is on AND the agent is brain-orb-capable.
-      // The mint route is independently flag-gated (404), so this is UI-only.
+      // #60 Phase 3: gate the client-held voice tile on the platform voice flag.
+      // The per-agent `brain-orb` capability is already enforced by the route
+      // guard (router/index.js) — this page never loads for a non-capable agent —
+      // so the flag alone is the correct additional gate here. The mint route is
+      // independently flag-gated (404), so this is UI-only.
       voiceAvailable: !!sessionsStore.brainOrbVoiceAvailable,
     },
     window.location.origin,        // pin target origin (same-origin iframe)

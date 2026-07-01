@@ -49,6 +49,8 @@
   #state-dot.speaking   { background: rgba(99,179,237,0.95); animation: pulse 0.6s ease-in-out infinite; }
   #state-dot.error      { background: rgba(255,32,86,0.85); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  /* p5 audio-reactive orb canvas — sits behind the controls, blends over the graph. */
+  canvas { position: fixed !important; top: 0 !important; left: 0 !important; z-index: 1 !important; display: block !important; mix-blend-mode: screen; }
 </style>
 </head>
 <body>
@@ -61,6 +63,9 @@
     <div id="state-dot"></div>
     <span id="status-text">press start to speak</span>
   </div>
+  <!-- Vendored p5.js (local → CSP script-src 'self'; the CDN load was the reason
+       the audio-reactive voice orb was stripped). Loads before voice.js. -->
+  <script src="./vendor/p5.min.js"></script>
   <!-- Logic externalized for prod CSP script-src 'self'. -->
   <script src="./voice.js"></script>
 </body>

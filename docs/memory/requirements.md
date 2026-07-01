@@ -3473,10 +3473,13 @@ on other agents or the UI. See [feature-flows/brain-orb.md](feature-flows/brain-
   construction**: the locked tool manifest declares only read/visual/scope tools; the browser cannot
   widen it, and orb.js's `ACTIONS` write surface stays disabled (no `/session` route). **Gating**: a
   new `brain_orb_voice_available` flag (`BRAIN_ORB_VOICE_ENABLED && GEMINI_API_KEY`, default OFF) —
-  distinct from the static `brain_orb_available` — AND the agent's `brain-orb` capability. CSP-clean:
-  `connect-src` already allows `wss:`; the Gemini JS client is hand-rolled (no CDN), the voice logic
-  and mic worklet are externalized same-origin files (script-src 'self'); the p5 CDN visualiser and
-  the standalone page's hardcoded key are stripped. The outer host iframe carries `allow="microphone"`.
+  distinct from the static `brain_orb_available` — AND the agent's `brain-orb` capability, enforced by
+  BOTH the route guard and the tab (the orb is never launchable on a non-Cornelius agent, even via a
+  raw URL — the `beforeEnter` guard reads `/info` capabilities and redirects otherwise, #60). CSP-clean:
+  `connect-src` already allows `wss:`; the Gemini JS client is hand-rolled (no SDK), the voice logic
+  and mic worklet are externalized same-origin files (script-src 'self'); the standalone page's
+  hardcoded key is stripped; its p5.js audio-reactive voice orb is **vendored locally** (not CDN) so
+  the speech animation is retained CSP-clean. The outer host iframe carries `allow="microphone"`.
 
 **Deferred (epic children)**: KB write actions (capture/link/run-skill) · automatic transcript-capture
 pipeline · headless skill injection · data-freshness/on-demand-refresh trigger · `data.json`

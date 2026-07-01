@@ -66,7 +66,9 @@ Gemini toolCall → voice iframe → postMessage 'orb-tool' → orb.js ORB_TOOLS
 
 **Read-only KB search:** `POST /api/agents/{name}/brain-orb/tool` (`AuthorizedAgentByName` — read) proxies to the agent-server `POST /api/brain-orb/tool`, which runs the agent's `~/.trinity/brain-orb/search` hook (a third convention sibling next to `scopes`/`scope`) via the same hardened `_run_hook` runner. Scope-aware and read-only by hook contract (fails closed to the core scope when none is mounted); 404 when the agent ships no `search` hook (the orb degrades to in-graph search).
 
-**CSP / assets (no nginx change):** `connect-src` already allows bare `wss:`, so the direct browser→Gemini socket needs no CSP edit. `script-src 'self'` means the Gemini client is **hand-rolled** (no vendored SDK, no CDN), the voice logic is externalized to `voice/voice.js`, and the mic AudioWorklet ships as a same-origin `voice/mic-worklet.js` (a `blob:` worklet would be blocked). The standalone Cornelius page's **hardcoded API key and p5-from-CDN visualiser are stripped**. The host iframe carries `allow="microphone"` so the nested `getUserMedia` resolves.
+**CSP / assets (no nginx change):** `connect-src` already allows bare `wss:`, so the direct browser→Gemini socket needs no CSP edit. `script-src 'self'` means the Gemini client is **hand-rolled** (no vendored SDK), the voice logic is externalized to `voice/voice.js`, and the mic AudioWorklet ships as a same-origin `voice/mic-worklet.js` (a `blob:` worklet would be blocked). The standalone Cornelius page's **hardcoded API key is stripped**; its **p5.js audio-reactive voice orb is retained but vendored locally** (`voice/vendor/p5.min.js`, no `eval`/`Function` → CSP-clean) instead of CDN-loaded — the output audio is routed through an `AnalyserNode` so the orb pulses with Cornelius's speech. The host iframe carries `allow="microphone"` so the nested `getUserMedia` resolves.
+
+**Voice orb animation:** the voice tile renders its own audio-reactive orb (a p5 smoke/core sketch) that breathes when idle and pulses with the spoken audio (`enqueueAudio` connects each output buffer through `outAnalyser`). It was briefly cut with the CDN p5 removal and then restored by vendoring p5 locally — a separate visualization from the main three.js knowledge orb.
 
 **Voice gating:** a new platform flag `brain_orb_voice_available` = `BRAIN_ORB_VOICE_ENABLED && GEMINI_API_KEY` (default OFF) — **distinct** from the static `brain_orb_available` (which has no Gemini dependency). The orb un-hides the voice tile only when the host passes `voiceAvailable:true` in the init handshake (platform flag) AND the agent is brain-orb-capable. The mint route is independently flag-gated (404 when off, 503 when no key), so the flag is UI-only and can't be bypassed.
 
@@ -89,7 +91,7 @@ Mechanical edits only (AC #1): externalize the inline module to `orb.js`; vendor
 AgentDetail.vue  (visibleTabs: Brain tab when brainOrbAvailable && capabilities⊇'brain-orb')
    │ select tab → router.push
    ▼
-/agents/:name/brain  (router beforeEnter: redirect unless sessionsStore.brainOrbAvailable)
+/agents/:name/brain  (router beforeEnter: redirect unless brainOrbAvailable AND agent /info capabilities ⊇ 'brain-orb')
    ▼
 AgentBrainOrb.vue  ── same-origin iframe ──>  /brain-orb/index.html  (first-party static page)
    │  postMessage handshake (origin-pinned):
@@ -113,7 +115,7 @@ FileResponse(~/resources/agent-visualization/data.json)   (agent owns generation
 - Platform flag: `BRAIN_ORB_ENABLED` (env, default OFF) → `brain_orb_available` in `GET /api/settings/feature-flags`. The static render has **no** Gemini dependency, so unlike voice/workspace/voip it is the bare env flag.
 - Voice flag (Phase 3): `BRAIN_ORB_VOICE_ENABLED && GEMINI_API_KEY` → `brain_orb_voice_available` (default OFF) — **distinct** from `brain_orb_available` because the voice tile needs a Gemini key. Un-hides the voice tile only when on AND the agent is brain-orb-capable; the `voice-token` mint route is independently flag-gated.
 - Per-agent capability: a **generalizable** `brain-orb` token in the agent's `template.yaml capabilities` list (surfaced by `GET /api/agents/{name}/info`, read frontend-side) — never a hardcoded agent/template name. Mirrors the `sessionAvailable` + `hasDashboard` idioms.
-- The **route guard** checks only the platform flag (workspace precedent); the **tab** checks both. A deep link to a non-capable agent loads but the proxy 404s → empty state.
+- The **route guard AND the tab both enforce the per-agent capability** (#60): the guard (`router/index.js beforeEnter`) fetches `GET /api/agents/{name}/info` and redirects to AgentDetail unless the agent declares `brain-orb` (and the platform flag is on) — so the orb is **never launchable on a non-Cornelius agent, even via a raw URL** (a stopped/uncapable agent redirects, not an empty orb). Because the route is capability-gated, the voice tile inside it only needs the platform voice flag.
 
 ## Auth
 

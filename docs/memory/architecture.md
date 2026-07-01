@@ -642,9 +642,12 @@ Trinity reads/renders + brokers control. Default OFF — no impact on other agen
   authToken}`; never in a URL) — no new ticket primitive. A `brain-orb:error`
   message shows the "hasn't rendered its mind yet" empty state. Gating:
   `brainOrbAvailable` (platform flag, `stores/sessions.js`) **AND** the per-agent
-  `brain-orb` token in `template.yaml capabilities` (read from `/info`; the route
-  guard checks only the flag, the `visibleTabs` Brain tab checks both — `hasDashboard`
-  idiom). Selecting the tab route-pushes to the page.
+  `brain-orb` token in `template.yaml capabilities` (read from `/info`). BOTH the
+  route guard (`beforeEnter` fetches `/info`, #60) and the `visibleTabs` Brain tab
+  enforce the capability, so the orb is never launchable on a non-Cornelius agent —
+  even via a raw URL (redirect, not empty state). Selecting the tab route-pushes to
+  the page. The voice tile also ships a **vendored p5** audio-reactive orb that
+  pulses with the spoken audio (CDN load was removed then re-vendored, #60).
 - **Backend proxy** (`routers/agent_brain_orb.py`, prefix `/api/agents/{name}/brain-orb/*`):
   one shared gate/proxy helper (flag → running → `agent_httpx_client` #1159, **byte
   pass-through**, 404/503/504/502 mapping). `GET /data` + `GET /scopes` + `POST /tool`
