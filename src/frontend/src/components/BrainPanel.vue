@@ -46,17 +46,17 @@
 
         <label class="flex items-center gap-2 cursor-pointer select-none mb-3">
           <input type="checkbox" v-model="enabled" :disabled="loading || saving"
-                 class="h-4 w-4 rounded border-gray-300 text-state-autonomous-500 focus:ring-state-autonomous-500" />
+                 class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
           <span class="text-sm text-gray-800 dark:text-gray-200">Run a processing step after each voice session</span>
         </label>
 
         <textarea v-model="prompt" :disabled="loading || saving" rows="5"
           placeholder="e.g. Summarize this voice conversation: 3 key insights, then any action items. Output only the note body."
-          class="w-full text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 p-2 focus:ring-1 focus:ring-state-autonomous-500 focus:border-state-autonomous-500"></textarea>
+          class="w-full text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 p-2 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"></textarea>
 
         <div class="mt-3 flex items-center gap-3">
           <button @click="save" :disabled="loading || saving"
-            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-state-autonomous-500 hover:bg-state-autonomous-600 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
             {{ saving ? 'Saving…' : 'Save' }}
           </button>
           <span v-if="saved" class="text-xs text-green-600 dark:text-green-400">Saved</span>
@@ -73,7 +73,7 @@
         :disabled="!running"
         class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
         :class="running
-          ? 'bg-state-autonomous-500 hover:bg-state-autonomous-600 text-white shadow-sm'
+          ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
           : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
