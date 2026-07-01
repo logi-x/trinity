@@ -46,6 +46,10 @@ _SEARCH_HOOK = HOOK_DIR / "search"   # POST: read JSON {query, ...} on stdin, pr
 # ⇒ 404 (the agent doesn't support writes), and the orb's action panel stays hidden.
 # run_skill / capture_transcript are Phase 4b (trinity-enterprise#66) — NOT handled here.
 _ACTION_HOOK = HOOK_DIR / "action"
+# #73 — post-voice-processing config {enabled, prompt}, edited from the Brain tab.
+# JSON is authoritative; the legacy .md is a prompt-only read fallback.
+_POSTPROCESS_CONFIG = HOOK_DIR / "voice-postprocess.json"
+_POSTPROCESS_MD = HOOK_DIR / "voice-postprocess.md"
 _HOME = Path("/home/developer")
 _MAX_HOOK_BODY = 64 * 1024           # scope/search requests are tiny (token list or query)
 _MAX_HOOK_OUT = 4 * 1024 * 1024      # hooks return small JSON; cap defensively
@@ -190,3 +194,39 @@ async def post_brain_orb_refresh():
     if not _hook_ready(_ACTION_HOOK):
         raise HTTPException(status_code=404, detail="Refresh not supported")
     return await _run_hook(_ACTION_HOOK, stdin=b'{"action":"refresh"}', timeout=180)
+
+
+@router.get("/api/brain-orb/postprocess")
+async def get_brain_orb_postprocess():
+    """Read the post-voice-processing config {enabled, prompt} (#73) for the Brain tab.
+    JSON preferred; legacy .md is a prompt-only fallback. Never 500 — absent ⇒ disabled."""
+    try:
+        c = json.loads(_POSTPROCESS_CONFIG.read_text())
+        return {"enabled": bool(c.get("enabled")), "prompt": str(c.get("prompt") or "")}
+    except Exception:
+        pass
+    try:
+        if _POSTPROCESS_MD.is_file():
+            p = _POSTPROCESS_MD.read_text().strip()
+            return {"enabled": bool(p), "prompt": p}
+    except Exception:
+        pass
+    return {"enabled": False, "prompt": ""}
+
+
+@router.put("/api/brain-orb/postprocess")
+async def put_brain_orb_postprocess(request: Request):
+    """Write the post-voice-processing config {enabled, prompt} (#73). Owner-gated at
+    the backend proxy. The agent's `action` hook reads this to decide whether to run
+    the post-session `claude -p` — `enabled:false` keeps the saved prompt but skips it."""
+    body = await request.body()
+    if len(body) > _MAX_HOOK_BODY:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        data = json.loads(body) if body else {}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    cfg = {"enabled": bool(data.get("enabled")), "prompt": str(data.get("prompt") or "")[:8000]}
+    _POSTPROCESS_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    _POSTPROCESS_CONFIG.write_text(json.dumps(cfg))
+    return {"ok": True, **cfg}

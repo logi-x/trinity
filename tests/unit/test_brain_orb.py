@@ -361,6 +361,8 @@ def agent_env(tmp_path, monkeypatch):
     monkeypatch.setattr(asbo, "_SCOPE_HOOK", hooks / "scope")
     monkeypatch.setattr(asbo, "_SEARCH_HOOK", hooks / "search")   # #60 Phase 3
     monkeypatch.setattr(asbo, "_ACTION_HOOK", hooks / "action")   # #61 Phase 4a
+    monkeypatch.setattr(asbo, "_POSTPROCESS_CONFIG", hooks / "voice-postprocess.json")   # #73
+    monkeypatch.setattr(asbo, "_POSTPROCESS_MD", hooks / "voice-postprocess.md")         # #73
     monkeypatch.setattr(asbo, "_HOME", tmp_path)   # subprocess cwd must exist on the test host
     app = FastAPI()
     app.include_router(asbo.router)
@@ -659,6 +661,59 @@ def test_agent_server_refresh_runs_action_hook(agent_env):
 def test_agent_server_refresh_absent_404(agent_env):
     r = agent_env.client.post("/api/brain-orb/refresh")
     assert r.status_code == 404
+
+
+# --- post-voice-processing config (#73) ---------------------------------------
+_POSTPROC_URL = f"/api/agents/{_AGENT}/brain-orb/postprocess"
+
+
+def test_postprocess_get_passthrough(client):
+    payload = b'{"enabled":true,"prompt":"summarize this"}'
+    with patch.object(bo, "get_agent_container", return_value=_running()), patch.object(
+        bo, "agent_httpx_client", _fake_httpx(result=_resp(200, payload))
+    ):
+        r = client.get(_POSTPROC_URL)
+    assert r.status_code == 200
+    assert r.json() == {"enabled": True, "prompt": "summarize this"}
+
+
+def test_postprocess_put_success_and_audited(client):
+    audit = AsyncMock()
+    with patch.object(bo, "_agent_request", AsyncMock(return_value=_resp(200, b'{"ok":true,"enabled":true,"prompt":"x"}'))), \
+         patch.object(bo.platform_audit_service, "log", audit):
+        r = client.put(_POSTPROC_URL, json={"enabled": True, "prompt": "x"})
+    assert r.status_code == 200
+    audit.assert_awaited_once()
+    assert audit.await_args.kwargs["event_action"] == "brain_orb_postprocess_config"
+
+
+def test_postprocess_owner_gate_403(client):
+    _deny_owner(client)
+    agent_req = AsyncMock()
+    with patch.object(bo, "_agent_request", agent_req):
+        assert client.get(_POSTPROC_URL).status_code == 403
+        assert client.put(_POSTPROC_URL, json={"enabled": False, "prompt": ""}).status_code == 403
+    agent_req.assert_not_called()
+
+
+def test_postprocess_write_flag_off_404(client, monkeypatch):
+    monkeypatch.setattr(bo, "BRAIN_ORB_WRITE_ENABLED", False)
+    assert client.get(_POSTPROC_URL).status_code == 404
+    assert client.put(_POSTPROC_URL, json={"enabled": False, "prompt": ""}).status_code == 404
+
+
+def test_agent_server_postprocess_roundtrip(agent_env):
+    # PUT writes the JSON config; GET reads it back (direct file I/O in the agent-server)
+    r = agent_env.client.put("/api/brain-orb/postprocess", json={"enabled": True, "prompt": "hello"})
+    assert r.status_code == 200 and r.json()["enabled"] is True
+    g = agent_env.client.get("/api/brain-orb/postprocess")
+    assert g.json() == {"enabled": True, "prompt": "hello"}
+
+
+def test_agent_server_postprocess_absent_defaults(agent_env):
+    # no config file → safe defaults, never 500
+    g = agent_env.client.get("/api/brain-orb/postprocess")
+    assert g.status_code == 200 and g.json() == {"enabled": False, "prompt": ""}
 
 
 def test_action_transcript_large_body_allowed(client):

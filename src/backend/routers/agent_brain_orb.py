@@ -325,3 +325,39 @@ async def post_brain_orb_refresh(agent_name: OwnedAgentByName, request: Request,
         request_id=getattr(request.state, "request_id", None),
     )
     return result
+
+
+@router.get("/{agent_name}/brain-orb/postprocess")
+async def get_brain_orb_postprocess(agent_name: OwnedAgentByName):
+    """Read the agent's post-voice-processing config `{enabled, prompt}` for the Brain
+    tab (#73). **Owner/admin only**, write-flag-gated (it configures the exec surface).
+    Proxies the agent-server `GET /api/brain-orb/postprocess`."""
+    _require_write_enabled()
+    response = await _agent_request(agent_name, "GET", "/api/brain-orb/postprocess", timeout=30.0)
+    return _passthrough(response, not_found="Brain Orb not available")
+
+
+@router.put("/{agent_name}/brain-orb/postprocess")
+async def put_brain_orb_postprocess(agent_name: OwnedAgentByName, request: Request, current_user: CurrentUser):
+    """Write the agent's post-voice-processing config `{enabled, prompt}` from the Brain
+    tab (#73). **Owner/admin only**, write-flag-gated, body-capped, audited. The agent's
+    `action` hook reads this to gate the post-session `claude -p` (enabled:false keeps
+    the saved prompt but skips execution)."""
+    _require_write_enabled()
+    body = await request.body()
+    if len(body) > _MAX_ACTION_BODY:
+        raise HTTPException(status_code=413, detail="Request too large")
+    response = await _agent_request(agent_name, "PUT", "/api/brain-orb/postprocess", content=body, timeout=30.0)
+    result = _passthrough(response, not_found="Brain Orb not available")
+    await platform_audit_service.log(
+        event_type=AuditEventType.CONFIGURATION,
+        event_action="brain_orb_postprocess_config",
+        source="api",
+        actor_user=current_user,
+        actor_ip=request.client.host if request.client else None,
+        target_type="agent",
+        target_id=agent_name,
+        endpoint=str(request.url.path),
+        request_id=getattr(request.state, "request_id", None),
+    )
+    return result
