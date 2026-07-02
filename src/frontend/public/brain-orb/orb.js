@@ -1291,7 +1291,7 @@ addEventListener('message', e=>{
   try{ const fn=ORB_TOOLS[m.name]; out = fn ? fn(m.args||{}) : {error:'unknown tool '+m.name}; }
   catch(err){ out={error:String(err&&err.message||err)}; }
   if(VOICE_DISPLAY_TOOLS.has(m.name)) pinned=true;   // hold it until the user takes over
-  Promise.resolve(out).then(o=>{ try{ e.source.postMessage({type:'orb-tool-result', id:m.id, output:o}, '*'); }catch(_){ } });
+  Promise.resolve(out).then(o=>{ try{ e.source.postMessage({type:'orb-tool-result', id:m.id, output:o}, window.location.origin); }catch(_){ } });
 });
 // #66 — the voice tile relays its finished conversation (it never holds the JWT);
 // we POST it to the owner-gated broker as capture_transcript, with the session id as
@@ -1311,13 +1311,15 @@ addEventListener('message', e=>{
 addEventListener('message', async e=>{
   if(e.origin!==window.location.origin) return;   // same-origin voice iframe only
   const m=e.data; if(!m || m.type!=='orb-voice-token-request' || !e.source) return;
-  if(!VOICE_PROXY){ try{ e.source.postMessage({type:'orb-voice-token', ok:false, error:'voice not available'}, '*'); }catch(_){ } return; }
+  // Replies origin-pinned — the ok-reply carries the ephemeral token (same-origin iframe).
+  const VOICE_ORIGIN = window.location.origin;
+  if(!VOICE_PROXY){ try{ e.source.postMessage({type:'orb-voice-token', ok:false, error:'voice not available'}, VOICE_ORIGIN); }catch(_){ } return; }
   try{
     const r=await fetch(VOICE_PROXY+'/voice-token', {method:'POST', headers:{...ORB_HEADERS}, signal:AbortSignal.timeout(12000)});
-    if(!r.ok){ e.source.postMessage({type:'orb-voice-token', ok:false, error:'mint failed ('+r.status+')'}, '*'); return; }
+    if(!r.ok){ e.source.postMessage({type:'orb-voice-token', ok:false, error:'mint failed ('+r.status+')'}, VOICE_ORIGIN); return; }
     const d=await r.json();
-    e.source.postMessage({type:'orb-voice-token', ok:true, token:d.ephemeral_token, model:d.model, voiceName:d.voice_name, expiresAt:d.expires_at}, '*');
-  }catch(err){ try{ e.source.postMessage({type:'orb-voice-token', ok:false, error:String(err&&err.message||err)}, '*'); }catch(_){ } }
+    e.source.postMessage({type:'orb-voice-token', ok:true, token:d.ephemeral_token, model:d.model, voiceName:d.voice_name, expiresAt:d.expires_at}, VOICE_ORIGIN);
+  }catch(err){ try{ e.source.postMessage({type:'orb-voice-token', ok:false, error:String(err&&err.message||err)}, VOICE_ORIGIN); }catch(_){ } }
 });
 function toggleVoice(){
   const t=$('voiceTile'); const open=t.classList.toggle('show');
@@ -1326,13 +1328,13 @@ function toggleVoice(){
     // First open loads the page (which auto-starts on load); a re-open of an
     // already-loaded (ended) tile re-starts via a message.
     if(!f.getAttribute('src')) f.setAttribute('src','./voice/orb.html?v='+Date.now());
-    else { try{ f.contentWindow.postMessage({type:'orb-voice-start'}, '*'); }catch(_){} }
+    else { try{ f.contentWindow.postMessage({type:'orb-voice-start'}, window.location.origin); }catch(_){} }
     toast('voice on — starting…'); }
   else {
     pinned=false;
     // turning voice off must DISCONNECT (mic + Gemini Live socket), not just hide the tile
     const f=$('voiceFrame');
-    try{ f && f.contentWindow && f.contentWindow.postMessage({type:'orb-voice-stop'}, '*'); }catch(_){}
+    try{ f && f.contentWindow && f.contentWindow.postMessage({type:'orb-voice-stop'}, window.location.origin); }catch(_){}
     toast('voice off - session disconnected');
   }
   renderDock();   // keep the dock's voice chip in sync

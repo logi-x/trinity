@@ -51,7 +51,14 @@
   function $(id) { return document.getElementById(id); }
 
   function _uuid() {
-    try { return crypto.randomUUID(); } catch (e) { return 's' + Date.now() + Math.random().toString(36).slice(2); }
+    if (crypto.randomUUID) return crypto.randomUUID();
+    // Non-secure-context fallback stays CSPRNG (never Math.random) — the id
+    // becomes the capture_transcript Idempotency-Key, so it must be unguessable.
+    var b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+    var h = Array.prototype.map.call(b, function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
   }
   function _logEvent(e) { _events.push({ ts: new Date().toISOString(), ...e }); }
   function _flushTurns() {   // push any buffered transcription as turn events
@@ -70,7 +77,8 @@
     var hasDialogue = _events.some(function (e) { return e.event === 'user_turn' || e.event === 'model_turn'; });
     if (hasDialogue) {
       try {
-        window.parent.postMessage({ type: 'orb-capture-transcript', session_id: _sessionId, events: _events }, '*');
+        // Origin-pinned: the transcript is sensitive; both frames are same-origin.
+        window.parent.postMessage({ type: 'orb-capture-transcript', session_id: _sessionId, events: _events }, window.location.origin);
       } catch (e) { console.warn('[brain-orb voice] transcript relay failed:', e.message); }
     }
   }
@@ -92,7 +100,7 @@
         if (msg && msg.ok && msg.token) resolve(msg);
         else reject(new Error((msg && msg.error) || 'could not start voice'));
       };
-      try { window.parent.postMessage({ type: 'orb-voice-token-request' }, '*'); }
+      try { window.parent.postMessage({ type: 'orb-voice-token-request' }, window.location.origin); }
       catch (e) { clearTimeout(timer); _tokenWaiter = null; reject(e); }
     });
   }
@@ -111,7 +119,7 @@
         }
       };
       window.addEventListener('message', h);
-      window.parent.postMessage({ type: 'orb-tool', id: id, name: name, args: args }, '*');
+      window.parent.postMessage({ type: 'orb-tool', id: id, name: name, args: args }, window.location.origin);
       setTimeout(function () {
         if (done) return; done = true;
         window.removeEventListener('message', h); resolve({ error: 'orb did not respond' });
@@ -581,7 +589,7 @@
     setState('IDLE');
     // Tell the parent we're loaded (it un-hides / positions the tile as needed).
     if (window.parent !== window) {
-      try { window.parent.postMessage({ type: 'orb-voice-ready' }, '*'); } catch (e) {}
+      try { window.parent.postMessage({ type: 'orb-voice-ready' }, window.location.origin); } catch (e) {}
       // #60: auto-start on load — opening the tile (via V) should begin the
       // conversation, not require a manual Start click. The V keypress is the
       // user gesture; if the mic is denied it falls to the ERROR state (Start
