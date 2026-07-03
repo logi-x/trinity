@@ -90,9 +90,15 @@ TABLES = {
             max_backlog_depth INTEGER DEFAULT 50,
             group_auth_mode TEXT DEFAULT 'none',
             voice_system_prompt TEXT,
+            voice_name TEXT,
+            public_channel_model TEXT,
+            public_channel_system_prompt TEXT,
             guardrails_config TEXT,
             file_sharing_enabled INTEGER DEFAULT 0,
             circuit_breaker_enabled INTEGER DEFAULT 0,
+            mcp_exposed INTEGER DEFAULT 0,
+            tts_voice_replies_enabled INTEGER DEFAULT 0,
+            tts_voice_id TEXT,
             deleted_at TEXT,
             FOREIGN KEY (owner_id) REFERENCES users(id),
             FOREIGN KEY (subscription_id) REFERENCES subscription_credentials(id)
@@ -247,6 +253,9 @@ TABLES = {
             stop_signal TEXT,
             delay_seconds INTEGER NOT NULL DEFAULT 0,
             timeout_per_run INTEGER,
+            max_duration_seconds INTEGER,
+            max_cost_usd REAL,
+            no_progress_threshold INTEGER,
             model TEXT,
             allowed_tools TEXT,
             status TEXT NOT NULL,
@@ -387,7 +396,7 @@ TABLES = {
             id TEXT PRIMARY KEY,
             agent_name TEXT NOT NULL,
             activity_type TEXT NOT NULL,
-            activity_state TEXT NOT NULL,
+            activity_state TEXT NOT NULL,  -- started, completed, failed, cancelled (#1332)
             parent_activity_id TEXT,
             started_at TEXT NOT NULL,
             completed_at TEXT,
@@ -403,6 +412,26 @@ TABLES = {
             FOREIGN KEY (parent_activity_id) REFERENCES agent_activities(id),
             FOREIGN KEY (related_chat_message_id) REFERENCES chat_messages(id),
             FOREIGN KEY (related_execution_id) REFERENCES schedule_executions(id)
+        )
+    """,
+
+    # -------------------------------------------------------------------------
+    # Agent Reports (#918) — agent-published structured telemetry/domain reports
+    # -------------------------------------------------------------------------
+    "agent_reports": """
+        CREATE TABLE IF NOT EXISTS agent_reports (
+            id TEXT PRIMARY KEY,
+            agent_name TEXT NOT NULL,
+            user_id INTEGER,
+            report_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            display_hint TEXT,
+            schema_version INTEGER DEFAULT 1,
+            period_start TEXT,
+            period_end TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """,
 
@@ -1151,6 +1180,29 @@ TABLES = {
             PRIMARY KEY (scope, idempotency_key)
         )
     """,
+    # -------------------------------------------------------------------------
+    # Agent compatibility results (#668)
+    # -------------------------------------------------------------------------
+    # Latest-snapshot-per-agent compatibility report (one row, upserted by
+    # agent_name). STATIC checks are recomputed live on each read; the persisted
+    # AI verdicts are merged in so AI findings show on every Overview load
+    # without re-spending tokens. `checks_json` is the full last report's check
+    # list. NOTE: this table is a deliberate departure from the issue's original
+    # "no DB table" note — see services/compatibility/.
+    "agent_compatibility_results": """
+        CREATE TABLE IF NOT EXISTS agent_compatibility_results (
+            agent_name TEXT PRIMARY KEY,
+            overall_status TEXT NOT NULL,
+            checks_json TEXT NOT NULL,
+            hard_count INTEGER NOT NULL DEFAULT 0,
+            soft_count INTEGER NOT NULL DEFAULT 0,
+            info_count INTEGER NOT NULL DEFAULT 0,
+            container_running INTEGER NOT NULL DEFAULT 0,
+            ai_ran_at TEXT,
+            static_ran_at TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """,
 }
 
 # =============================================================================
@@ -1238,12 +1290,21 @@ INDEXES = [
 
     # Activity indexes
     "CREATE INDEX IF NOT EXISTS idx_activities_agent ON agent_activities(agent_name, created_at DESC)",
+    # #1265: fleet-wide timeline sorts by created_at DESC with no agent_name predicate;
+    # the composite idx_activities_agent can't serve that sort, so it degraded to scan+sort.
+    "CREATE INDEX IF NOT EXISTS idx_activities_created ON agent_activities(created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_activities_type ON agent_activities(activity_type)",
     "CREATE INDEX IF NOT EXISTS idx_activities_state ON agent_activities(activity_state)",
     "CREATE INDEX IF NOT EXISTS idx_activities_user ON agent_activities(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_activities_parent ON agent_activities(parent_activity_id)",
     "CREATE INDEX IF NOT EXISTS idx_activities_chat_msg ON agent_activities(related_chat_message_id)",
     "CREATE INDEX IF NOT EXISTS idx_activities_execution ON agent_activities(related_execution_id)",
+
+    # Agent report indexes (#918)
+    "CREATE INDEX IF NOT EXISTS idx_agent_reports_agent ON agent_reports(agent_name, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_reports_type ON agent_reports(report_type, created_at DESC)",
+    # Serves the retention sweep's `WHERE created_at < cutoff` scan (#918).
+    "CREATE INDEX IF NOT EXISTS idx_agent_reports_created ON agent_reports(created_at)",
 
     # Permission indexes
     "CREATE INDEX IF NOT EXISTS idx_permissions_source ON agent_permissions(source_agent)",

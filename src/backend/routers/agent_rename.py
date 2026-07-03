@@ -5,9 +5,8 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
 
-from models import User
+from models import RenameAgentRequest, User
 from database import db
 from dependencies import get_current_user
 from services.docker_service import get_agent_container
@@ -33,11 +32,6 @@ def set_filtered_websocket_manager(ws_manager):
     """Set the filtered WebSocket manager for /ws/events (Trinity Connect)."""
     global filtered_manager
     filtered_manager = ws_manager
-
-
-class RenameAgentRequest(BaseModel):
-    """Request body for agent rename."""
-    new_name: str
 
 
 @router.put("/{agent_name}/rename")
@@ -119,6 +113,14 @@ async def rename_agent_endpoint(
 
         # Update container labels (need to recreate for label changes)
         # For now, we'll update just the database and handle labels on next start
+        #
+        # #1159: the running container still carries TRINITY_AGENT_AUTH_TOKEN=
+        # derive(old_name); under the new name that token is stale and would 401
+        # once enforcement is on (Codex #4). No extra work here — the rename
+        # leaves the agent stopped, and the next start_agent_internal recreate is
+        # forced by check_agent_auth_token_env_matches (token mismatch) and
+        # re-injects derive(new_name). Same recreate-on-next-start path the label/
+        # volume changes above already depend on.
 
         # Rename Docker volume
         # Docker doesn't support renaming volumes directly

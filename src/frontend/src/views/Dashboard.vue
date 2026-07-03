@@ -189,12 +189,31 @@
         </div>
 
     <!-- Timeline View (only visible in timeline mode) -->
-    <ReplayTimeline
-      v-if="isTimelineMode"
-      :agents="agents"
-      :nodes="nodes"
-      :events="historicalCollaborations"
-      :timeline-start="timelineStart"
+    <template v-if="isTimelineMode">
+      <!-- Loading skeleton (#1266): immediate feedback while fleet/timeline data loads -->
+      <div
+        v-if="isFleetLoading && agents.length === 0"
+        class="flex-1 min-h-0 overflow-hidden bg-white dark:bg-gray-800 px-4 py-4"
+      >
+        <SkeletonLoader variant="rows" :count="8" height="2.5rem" gap="0.5rem" />
+      </div>
+      <!-- Error state (#1266): distinct from an empty timeline / infinite skeleton -->
+      <div
+        v-else-if="fleetLoadError && agents.length === 0"
+        class="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-4"
+      >
+        <p class="text-sm text-gray-600 dark:text-gray-300">Couldn't load timeline data.</p>
+        <button
+          @click="refreshAll"
+          class="mt-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
+        >Retry</button>
+      </div>
+      <ReplayTimeline
+        v-else
+        :agents="agents"
+        :nodes="nodes"
+        :events="historicalCollaborations"
+        :timeline-start="timelineStart"
       :timeline-end="timelineEnd"
       :current-event-index="currentEventIndex"
       :total-events="totalEvents"
@@ -213,30 +232,58 @@
       @stop="handleStop"
       @speed-change="handleSpeedChange"
       @toggle-autonomy="handleToggleAutonomy"
-    />
+      />
+    </template>
 
     <!-- Graph Canvas - Full Height (expands to fill remaining space) - Hidden in Timeline mode -->
     <div v-if="!isTimelineMode" class="relative bg-white dark:bg-gray-800 shadow-sm dark:shadow-gray-900 flex-1 min-h-0">
+      <!-- Loading skeleton (#1266): graph node placeholders instead of the "No agents" empty state -->
+      <div
+        v-if="isFleetLoading && nodes.length === 0"
+        class="absolute inset-0 flex items-center justify-center"
+      >
+        <SkeletonLoader variant="nodes" :count="5" />
+      </div>
+      <!-- Error state (#1266): distinct from loading and from a genuinely empty fleet -->
+      <div
+        v-else-if="fleetLoadError && nodes.length === 0"
+        class="absolute inset-0 flex items-center justify-center"
+      >
+        <div class="text-center">
+          <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100">Couldn't load agents</h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Something went wrong fetching the fleet.</p>
+          <button
+            @click="refreshAll"
+            class="mt-4 inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+          >Retry</button>
+        </div>
+      </div>
       <!-- Empty state -->
       <div
-        v-if="nodes.length === 0"
+        v-else-if="nodes.length === 0"
         class="absolute inset-0 flex items-center justify-center"
       >
         <div class="text-center">
           <svg class="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
           </svg>
-          <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No agents</h3>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Create an agent to get started.</p>
-          <div class="mt-4">
-            <router-link
-              to="/agents"
+          <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No agents yet</h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Launch your first agent in a couple of clicks.</p>
+          <div class="mt-4 flex items-center justify-center gap-3">
+            <button
+              @click="openOnboarding"
               class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
             >
               <svg class="-ml-1 mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
-              Create Agent
+              Get started
+            </button>
+            <router-link
+              to="/agents"
+              class="text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            >
+              Browse manually →
             </router-link>
           </div>
         </div>
@@ -424,6 +471,14 @@
       @close="closeEditor"
       @saved="onViewSaved"
     />
+
+    <!-- First-run onboarding wizard (trinity-enterprise#52) -->
+    <OnboardingWizard
+      v-if="showOnboarding"
+      :claude-auth-configured="sessionsStore.claudeAuthConfigured"
+      @close="closeOnboarding"
+      @deployed="onAgentDeployed"
+    />
   </div>
 </template>
 
@@ -431,10 +486,14 @@
 import NavBar from '@/components/NavBar.vue'
 import HostTelemetry from '@/components/HostTelemetry.vue'
 import ReplayTimeline from '@/components/ReplayTimeline.vue'
+import SkeletonLoader from '@/components/SkeletonLoader.vue'
 import SystemViewsSidebar from '@/components/SystemViewsSidebar.vue'
 import SystemViewEditor from '@/components/SystemViewEditor.vue'
+import OnboardingWizard from '@/components/OnboardingWizard.vue'
+import { useSessionsStore } from '@/stores/sessions'
 import axios from 'axios'
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -455,6 +514,43 @@ import '@vue-flow/minimap/dist/style.css'
 
 const networkStore = useNetworkStore()
 const systemViewsStore = useSystemViewsStore()
+const sessionsStore = useSessionsStore()
+const route = useRoute()
+
+// First-run onboarding (trinity-enterprise#52). Auto-opens once for a fresh
+// install with zero agents; dismissal is remembered so it never nags.
+const ONBOARDING_DISMISSED_KEY = 'trinity_onboarding_dismissed_v1'
+const showOnboarding = ref(false)
+function openOnboarding() {
+  showOnboarding.value = true
+}
+function closeOnboarding() {
+  showOnboarding.value = false
+  try { localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1') } catch { /* ignore */ }
+}
+function onAgentDeployed() {
+  // Agent was created via the wizard's real create modal. Keep the wizard open
+  // (it advances to the credential step on its own) and refresh the fleet so
+  // the new agent appears on the graph without a manual page reload — the
+  // WebSocket agent_created event can lag while the container spins up.
+  networkStore.fetchAgents()
+}
+function maybeAutoOpenOnboarding() {
+  if (showOnboarding.value) return
+  // Explicit ?onboarding=1 re-opens the wizard any time (re-run / QA preview),
+  // regardless of fleet size or prior dismissal.
+  if (route.query.onboarding === '1') {
+    showOnboarding.value = true
+    return
+  }
+  if (isFleetLoading.value) return
+  // Count only user-created agents — `trinity-system` exists on every install,
+  // so counting it would mean a fresh fleet is never "empty" and auto-open
+  // would never fire.
+  if (agents.value.filter(a => !a.is_system).length > 0) return
+  if (localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1') return
+  showOnboarding.value = true
+}
 
 // System View Editor Modal State
 const isEditorOpen = ref(false)
@@ -492,6 +588,8 @@ const {
   totalCollaborationCount,
   timeRangeHours,
   isLoadingHistory,
+  loading: isFleetLoading,
+  loadError: fleetLoadError,
   contextStats,
   executionStats,
   slotStats,
@@ -599,6 +697,11 @@ onMounted(async () => {
     networkStore.fetchSchedules(),
     fetchAvailableTags()
   ])
+
+  // First-run onboarding: load the Claude-auth flag (for the wizard's setup
+  // hint) and auto-open the wizard if this is a fresh, empty install.
+  sessionsStore.loadFeatureFlags().catch(() => {})
+  maybeAutoOpenOnboarding()
 
   // Connect WebSocket for real-time updates
   networkStore.connectWebSocket()

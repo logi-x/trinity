@@ -13,9 +13,10 @@ import uuid
 from datetime import datetime
 from typing import NamedTuple, NoReturn, Optional
 
-from models import User, ChatMessageRequest, ModelChangeRequest, ParallelTaskRequest, ActivityType, ActivityState, TaskExecutionStatus, ExecutionSource
+from models import User, ChatMessageRequest, ModelChangeRequest, ParallelTaskRequest, ActivityType, ActivityState, TaskExecutionStatus, ExecutionSource, activity_state_for_terminal
 from dependencies import get_current_user, get_authorized_agent, get_owned_agent
 from services.agent_call_limiter import BackendAgentCallBudgetExhausted
+from services.agent_auth import agent_httpx_client
 from services.docker_service import get_agent_container
 from services.activity_service import activity_service
 from services.upload_service import process_file_uploads, decode_web_file, WEB_MAX_FILES, WEB_MAX_FILE_SIZE, WEB_MAX_IMAGE_SIZE, WEB_MAX_TOTAL_IMAGE_SIZE
@@ -610,6 +611,15 @@ async def _run_chat_and_finalize(
         if request.model:
             payload["model"] = request.model
         # Inject platform instructions + execution context (#171) into every chat request.
+        # Resolve the agent runtime (best-effort, never raises) so the MCP-tool
+        # naming in the platform prompt matches the harness (#1187 F-MCP). Lazy +
+        # guarded import so a re-import under a stubbed services.docker_service
+        # (unit tests) can't break dispatch; Claude default on any failure.
+        try:
+            from services.docker_service import get_agent_runtime
+            agent_runtime = get_agent_runtime(name)
+        except Exception:
+            agent_runtime = "claude-code"
         try:
             exec_ctx = ExecutionContext(
                 agent_name=name,
@@ -623,10 +633,11 @@ async def _run_chat_and_finalize(
             payload["system_prompt"] = compose_system_prompt(
                 execution_context=exec_ctx,
                 include_execution_context=is_execution_context_enabled(),
+                runtime=agent_runtime,
             )
         except Exception as e:
             logger.warning(f"[Chat] execution context build failed, falling back: {e}")
-            payload["system_prompt"] = get_platform_system_prompt()
+            payload["system_prompt"] = get_platform_system_prompt(runtime=agent_runtime)
         # Pass execution ID so agent registers process under the same ID (enables termination)
         if task_execution_id:
             payload["execution_id"] = task_execution_id
@@ -789,24 +800,32 @@ async def _run_chat_and_finalize(
         # in-flight chat activity + execution row in the FAILED state
         # so the timeline reflects the rejection accurately.
         budget_msg = str(_budget_e)
+        # #1332: read the row's current state BEFORE closing activities. If it
+        # already went terminal (e.g. CANCELLED via an operator terminate that
+        # raced this rejection), mirror that real state onto the chat/collab
+        # activities instead of stamping FAILED over a cancel. A still-RUNNING
+        # or missing row maps to FAILED — the genuine-rejection case.
+        existing = db.get_execution(task_execution_id) if task_execution_id else None
+        budget_close_state = (
+            activity_state_for_terminal(existing.status) if existing else ActivityState.FAILED
+        )
+        budget_close_error = budget_msg if budget_close_state == ActivityState.FAILED else None
         await activity_service.complete_activity(
             activity_id=chat_activity_id,
-            status=ActivityState.FAILED,
-            error=budget_msg,
+            status=budget_close_state,
+            error=budget_close_error,
         )
-        if task_execution_id:
-            existing = db.get_execution(task_execution_id)
-            if not existing or existing.status != TaskExecutionStatus.CANCELLED:
-                db.update_execution_status(
-                    execution_id=task_execution_id,
-                    status=TaskExecutionStatus.FAILED,
-                    error=budget_msg,
-                )
+        if task_execution_id and (not existing or existing.status != TaskExecutionStatus.CANCELLED):
+            db.update_execution_status(
+                execution_id=task_execution_id,
+                status=TaskExecutionStatus.FAILED,
+                error=budget_msg,
+            )
         if collaboration_activity_id:
             await activity_service.complete_activity(
                 activity_id=collaboration_activity_id,
-                status=ActivityState.FAILED,
-                error=budget_msg,
+                status=budget_close_state,
+                error=budget_close_error,
             )
         raise HTTPException(status_code=503, detail=budget_msg)
 
@@ -835,11 +854,20 @@ async def _run_chat_and_finalize(
                     error_msg = e.response.text[:500]
         logging.getLogger("trinity.errors").error(f"Failed to communicate with agent {name}: {error_msg}")
 
+        # #1332: read the row state BEFORE closing activities so a row already
+        # CANCELLED (operator terminate raced this HTTP error) closes the
+        # chat/collab activities as CANCELLED, not FAILED. RUNNING/missing → FAILED.
+        existing = db.get_execution(task_execution_id) if task_execution_id else None
+        http_close_state = (
+            activity_state_for_terminal(existing.status) if existing else ActivityState.FAILED
+        )
+        http_close_error = error_msg if http_close_state == ActivityState.FAILED else None
+
         # Track chat failure
         await activity_service.complete_activity(
             activity_id=chat_activity_id,
-            status=ActivityState.FAILED,
-            error=error_msg
+            status=http_close_state,
+            error=http_close_error,
         )
 
         # Update task execution record on failure (#96: all chat types now have execution records)
@@ -849,31 +877,29 @@ async def _run_chat_and_finalize(
         # the SQL WHERE clause in update_execution_status already blocks a
         # FAILED write over a CANCELLED row, but the explicit pre-check
         # keeps the two callers consistent and avoids a wasted UPDATE.
-        if task_execution_id:
-            existing = db.get_execution(task_execution_id)
-            if not existing or existing.status != TaskExecutionStatus.CANCELLED:
-                salvage_cost = partial_metadata.get("cost_usd") if partial_metadata else None
-                salvage_context = _compute_context_used(partial_metadata) if partial_metadata else None
-                salvage_context_max = (
-                    (partial_metadata.get("context_window") or 200000)
-                    if partial_metadata
-                    else None
-                )
-                db.update_execution_status(
-                    execution_id=task_execution_id,
-                    status=TaskExecutionStatus.FAILED,
-                    error=error_msg,
-                    cost=salvage_cost,
-                    context_used=salvage_context,
-                    context_max=salvage_context_max,
-                )
+        if task_execution_id and (not existing or existing.status != TaskExecutionStatus.CANCELLED):
+            salvage_cost = partial_metadata.get("cost_usd") if partial_metadata else None
+            salvage_context = _compute_context_used(partial_metadata) if partial_metadata else None
+            salvage_context_max = (
+                (partial_metadata.get("context_window") or 200000)
+                if partial_metadata
+                else None
+            )
+            db.update_execution_status(
+                execution_id=task_execution_id,
+                status=TaskExecutionStatus.FAILED,
+                error=error_msg,
+                cost=salvage_cost,
+                context_used=salvage_context,
+                context_max=salvage_context_max,
+            )
 
         # Complete collaboration activity on failure (was missing - caused activities to stay in "started" state)
         if collaboration_activity_id:
             await activity_service.complete_activity(
                 activity_id=collaboration_activity_id,
-                status=ActivityState.FAILED,
-                error=error_msg
+                status=http_close_state,
+                error=http_close_error,
             )
 
         # SUB-003 (#441): Auto-switch on rate-limit (429) OR auth-class
@@ -1177,11 +1203,8 @@ async def _complete_collaboration_activity(
     try:
         await activity_service.complete_activity(
             activity_id=collaboration_activity_id,
-            status=(
-                ActivityState.COMPLETED
-                if result.status == TaskExecutionStatus.SUCCESS
-                else ActivityState.FAILED
-            ),
+            # #1332: a cancelled collaboration turn reads as CANCELLED, not FAILED.
+            status=activity_state_for_terminal(result.status),
             details={
                 "response_length": len(result.response or ""),
                 "execution_time_ms": execution_time_ms,
@@ -1203,11 +1226,8 @@ async def _finalize_self_task(
     if not (is_self_task and self_task_activity_id):
         return
 
-    activity_status = (
-        ActivityState.COMPLETED
-        if result.status == TaskExecutionStatus.SUCCESS
-        else ActivityState.FAILED
-    )
+    # #1332: a cancelled self-task turn reads as CANCELLED, not FAILED.
+    activity_status = activity_state_for_terminal(result.status)
 
     # Complete the self-task activity
     try:
@@ -1258,7 +1278,9 @@ async def _finalize_self_task(
                 "type": "agent_activity",
                 "agent_name": agent_name,
                 "activity_type": "self_task",
-                "activity_state": "completed" if result.status == TaskExecutionStatus.SUCCESS else "failed",
+                # #1332: mirror the activity DB state (cancelled stays cancelled)
+                # so the WS event and the persisted row never disagree.
+                "activity_state": activity_status.value,
                 "action": f"Background task completed",
                 "timestamp": utc_now_iso(),
                 "details": {
@@ -1577,6 +1599,11 @@ async def execute_parallel_task(
             # enqueue, so nothing was backlogged. Close the pre-created row
             # FAILED(circuit_open) and return 503.
             logger.warning(f"[Task Async] Agent '{name}' dispatch circuit open, rejecting")
+            # #946: nothing dispatched — release the idempotency claim so the
+            # caller can retry with the same key once the breaker recovers,
+            # mirroring /chat (line 242) and the CapacityFull branch above.
+            # Without this the in_flight row blocks same-key retries for 24h.
+            idempotency_service.fail(idem)
             _raise_circuit_open_503(name, execution_id, e)
 
         if cap_result.state == "queued_persistent":
@@ -1693,6 +1720,9 @@ async def execute_parallel_task(
         # #526: dispatch breaker open — raised before the queue_persistent
         # enqueue. Close the pre-created row FAILED(circuit_open) and 503.
         logger.warning(f"[Task Sync] Agent '{name}' dispatch circuit open, rejecting")
+        # #946: release the idempotency claim so the same-key retry isn't
+        # blocked for 24h, mirroring /chat (line 242) and CapacityFull above.
+        idempotency_service.fail(idem)
         _raise_circuit_open_503(name, execution_id, e)
 
     sync_slot_acquired = sync_cap_result.state == "admitted"
@@ -1761,7 +1791,9 @@ async def execute_parallel_task(
         # Side effects (collaboration activity, chat session persist) were
         # handled by _run_async_task_with_persistence inside the drain — do
         # NOT repeat them. Just translate failure and build the response.
-        if result.status == "failed":
+        # #679: CANCELLED is non-success — surface it cleanly (503 with the
+        # cancel notice) rather than returning an empty success-shaped body.
+        if result.status in ("failed", "cancelled"):
             if "at capacity" in (result.error or ""):
                 raise HTTPException(
                     status_code=429,
@@ -1808,7 +1840,8 @@ async def execute_parallel_task(
     if collaboration_activity_id:
         await activity_service.complete_activity(
             activity_id=collaboration_activity_id,
-            status=ActivityState.COMPLETED if result.status == TaskExecutionStatus.SUCCESS else ActivityState.FAILED,
+            # #1332: a cancelled collaboration turn reads as CANCELLED, not FAILED.
+            status=activity_state_for_terminal(result.status),
             details={
                 "response_length": len(result.response),
                 "execution_id": execution_id,
@@ -1817,7 +1850,9 @@ async def execute_parallel_task(
         )
 
     # Handle failure — translate to HTTP errors
-    if result.status == "failed":
+    # #679: CANCELLED is non-success — surface it cleanly rather than returning
+    # an empty success-shaped body (result.error is "Execution cancelled by user").
+    if result.status in ("failed", "cancelled"):
         if "at capacity" in (result.error or ""):
             raise HTTPException(
                 status_code=429,
@@ -1876,7 +1911,7 @@ async def get_agent_chat_history(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with agent_httpx_client(name) as client:
             response = await client.get(
                 f"http://agent-{name}:8000/api/chat/history",
                 timeout=10.0
@@ -1909,7 +1944,7 @@ async def reset_agent_chat_history(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with agent_httpx_client(name) as client:
             response = await client.delete(
                 f"http://agent-{name}:8000/api/chat/history",
                 timeout=10.0
@@ -1950,7 +1985,7 @@ async def get_agent_chat_session(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with agent_httpx_client(name) as client:
             response = await client.get(
                 f"http://agent-{name}:8000/api/chat/session",
                 timeout=10.0
@@ -1992,7 +2027,7 @@ async def get_agent_activity(
         }
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with agent_httpx_client(name) as client:
             response = await client.get(
                 f"http://agent-{name}:8000/api/activity",
                 timeout=10.0
@@ -2031,7 +2066,7 @@ async def get_agent_activity_detail(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with agent_httpx_client(name) as client:
             response = await client.get(
                 f"http://agent-{name}:8000/api/activity/{tool_id}",
                 timeout=10.0
@@ -2064,7 +2099,7 @@ async def clear_agent_activity(
         }
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with agent_httpx_client(name) as client:
             response = await client.delete(
                 f"http://agent-{name}:8000/api/activity",
                 timeout=10.0
@@ -2099,7 +2134,7 @@ async def get_agent_model(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with agent_httpx_client(name) as client:
             response = await client.get(
                 f"http://agent-{name}:8000/api/model",
                 timeout=10.0
@@ -2133,7 +2168,7 @@ async def set_agent_model(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with agent_httpx_client(name) as client:
             response = await client.put(
                 f"http://agent-{name}:8000/api/model",
                 json={"model": request.model},
@@ -2361,7 +2396,7 @@ async def terminate_agent_execution(
 
     try:
         # Proxy termination request to agent container
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with agent_httpx_client(name, timeout=15.0) as client:
             response = await client.post(
                 f"http://agent-{name}:8000/api/executions/{execution_id}/terminate"
             )
@@ -2392,14 +2427,66 @@ async def terminate_agent_execution(
             except Exception as e:
                 logger.warning(f"[Terminate] Failed to force-release capacity for {name}: {e}")
 
-            # Update database execution record if provided
-            if task_execution_id:
-                db.update_execution_status(
+            # #679 (Issue 7): write CANCELLED only when we actually terminated a
+            # running turn. On `already_finished` the agent's genuine terminal
+            # already stands — the cancel arrived too late — so we leave the real
+            # terminal in place (deterministic; "agent self-report is
+            # authoritative"). Capacity is still force-released above in both cases.
+            if task_execution_id and result.get("status") == "terminated":
+                cancel_won = db.update_execution_status(
                     execution_id=task_execution_id,
                     status=TaskExecutionStatus.CANCELLED,
                     error="Execution terminated by user"
                 )
-                logger.info(f"[Terminate] Updated database execution {task_execution_id} to cancelled")
+                if cancel_won:
+                    logger.info(f"[Terminate] Updated database execution {task_execution_id} to cancelled")
+                else:
+                    logger.info(
+                        f"[Terminate] CANCELLED write for {task_execution_id} lost the CAS — "
+                        f"row already terminal; leaving it and closing the activity in its real state"
+                    )
+
+                # #1332 (Path B): close the still-open dispatch activity as
+                # CANCELLED immediately. The operator-terminate path writes the
+                # CANCELLED row first and never reaches apply_result (the async
+                # callback short-circuits on the authoritative terminal; a sync
+                # apply_result loses the CAS), so without this the dispatch
+                # activity is left `started` until mark_stale_activities_failed
+                # flips it to FAILED ~30 min later. Best-effort like
+                # _close_stale_slot_activity — a close failure never fails the
+                # terminate request.
+                #
+                # Gate the activity state on whether the CANCELLED row-write won
+                # the CAS: if it LOST (the row went terminal via a concurrent
+                # path between the agent's terminate response and this write),
+                # close the activity in the row's ACTUAL terminal state so the
+                # activity never disagrees with the row (e.g. row=SUCCESS would
+                # else read CANCELLED). Won → CANCELLED.
+                try:
+                    dispatch_activity_id = db.get_open_activity_id_for_execution(task_execution_id)
+                    if dispatch_activity_id:
+                        if cancel_won:
+                            close_state = ActivityState.CANCELLED
+                            close_error = "Execution terminated by user"
+                        else:
+                            reconciled = db.get_execution(task_execution_id)
+                            close_state = activity_state_for_terminal(
+                                reconciled.status if reconciled else TaskExecutionStatus.CANCELLED
+                            )
+                            close_error = (
+                                None if close_state == ActivityState.COMPLETED
+                                else "Execution terminated by user"
+                            )
+                        await activity_service.complete_activity(
+                            activity_id=dispatch_activity_id,
+                            status=close_state,
+                            error=close_error,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[Terminate] Failed to close dispatch activity for "
+                        f"{task_execution_id} as cancelled: {e}"
+                    )
 
         # Track termination activity
         await activity_service.track_activity(
@@ -2448,7 +2535,7 @@ async def get_agent_running_executions(
         return {"executions": []}
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with agent_httpx_client(name, timeout=10.0) as client:
             response = await client.get(
                 f"http://agent-{name}:8000/api/executions/running"
             )
@@ -2494,7 +2581,7 @@ async def stream_execution_log(
             # Connect timeout prevents hanging if agent is unresponsive,
             # but read timeout is None since SSE streams are long-lived
             timeout = httpx.Timeout(connect=10.0, read=None, write=None, pool=None)
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with agent_httpx_client(name, timeout=timeout) as client:
                 async with client.stream("GET", agent_url) as response:
                     if response.status_code == 404:
                         # Execution not found on agent (race condition: task not started yet)

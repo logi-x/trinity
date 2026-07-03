@@ -10,14 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
 
 from database import db
 from dependencies import get_current_user
-from models import User
+from models import AvatarGenerateRequest, User
+from services.agent_auth import agent_httpx_client
 from services.image_generation_prompts import AVATAR_EMOTIONS, AVATAR_EMOTION_PROMPTS
 from services.image_generation_service import get_image_generation_service
 from utils.image_optimize import optimize_avatar
@@ -92,10 +91,6 @@ def _get_style_for_agent(agent_name: str) -> str:
     return _DEFAULT_AVATAR_STYLES[h % len(_DEFAULT_AVATAR_STYLES)]
 
 
-class AvatarGenerateRequest(BaseModel):
-    identity_prompt: str
-
-
 async def _get_prompt_from_template(agent_name: str) -> Optional[str]:
     """Fetch avatar_prompt or build from description via agent's template.yaml.
 
@@ -103,7 +98,7 @@ async def _get_prompt_from_template(agent_name: str) -> Optional[str]:
     or None if the agent is unreachable or has no useful template data.
     """
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with agent_httpx_client(agent_name, timeout=5.0) as client:
             resp = await client.get(f"http://agent-{agent_name}:8000/api/template/info")
             if resp.status_code == 200:
                 data = resp.json()

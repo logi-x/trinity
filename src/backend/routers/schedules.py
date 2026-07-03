@@ -8,21 +8,32 @@ defined BEFORE dynamic routes like /{name}/schedules to avoid FastAPI matching
 "scheduler" as an agent name.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from typing import List, Optional
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from typing import List
 from datetime import datetime
 import json
 import os
 import logging
 import httpx
 
-from models import User, ScheduleAnalyticsResponse
+from models import (
+    AgentSchedulesSummaryResponse,
+    ExecutionResponse,
+    ExecutionSummary,
+    ScheduleAnalyticsResponse,
+    ScheduleResponse,
+    ScheduleUpdateRequest,
+    User,
+    WebhookStatusResponse,
+)
 from dependencies import get_current_user, get_authorized_agent, AuthorizedAgent, CurrentUser
 from database import db, Schedule, ScheduleCreate, ScheduleExecution
 from services.platform_audit_service import platform_audit_service, AuditEventType
 
 _ANALYTICS_VALID_WINDOWS = frozenset({24, 168, 720})  # #868
+# #1115: Overview/Schedules-tab scorecard windows → hours (matches the #1107
+# Overview selector: 7 / 14 / 30 days).
+_SUMMARY_WINDOW_HOURS = {"7d": 168, "14d": 336, "30d": 720}
 
 logger = logging.getLogger(__name__)
 
@@ -72,148 +83,6 @@ async def get_scheduler_status(
     except httpx.TimeoutException:
         logger.warning(f"Timeout connecting to scheduler")
         return {"running": False, "error": "Scheduler timeout"}
-
-
-# Request/Response Models
-
-class ScheduleUpdateRequest(BaseModel):
-    """Request model for updating a schedule."""
-    name: Optional[str] = None
-    cron_expression: Optional[str] = None
-    message: Optional[str] = None
-    enabled: Optional[bool] = None
-    timezone: Optional[str] = None
-    description: Optional[str] = None
-    timeout_seconds: Optional[int] = None
-    allowed_tools: Optional[List[str]] = None
-    model: Optional[str] = None  # Model override (MODEL-001)
-    # Retry configuration (RETRY-001)
-    max_retries: Optional[int] = None
-    retry_delay_seconds: Optional[int] = None
-    # Validation configuration (VALIDATE-001)
-    validation_enabled: Optional[bool] = None
-    validation_prompt: Optional[str] = None
-    validation_timeout_seconds: Optional[int] = None
-
-
-class ScheduleResponse(BaseModel):
-    """Response model for schedule data."""
-    id: str
-    agent_name: str
-    name: str
-    cron_expression: str
-    message: str
-    enabled: bool
-    timezone: str
-    description: Optional[str]
-    created_at: datetime
-    updated_at: datetime
-    last_run_at: Optional[datetime]
-    next_run_at: Optional[datetime]
-    # #913: null means "inherit from agent_ownership.execution_timeout_seconds".
-    timeout_seconds: Optional[int] = None
-    allowed_tools: Optional[List[str]] = None
-    model: Optional[str] = None  # Model override (MODEL-001)
-    # Validation configuration (VALIDATE-001)
-    validation_enabled: bool = False
-    validation_prompt: Optional[str] = None
-    validation_timeout_seconds: int = 120
-
-    class Config:
-        from_attributes = True
-
-
-class ExecutionSummary(BaseModel):
-    """Lightweight execution response for list views - excludes large text fields.
-
-    Used by GET /api/agents/{name}/executions for fast list loading.
-    Full details available via GET /api/agents/{name}/executions/{id}.
-    """
-    id: str
-    schedule_id: str
-    agent_name: str
-    status: str
-    started_at: datetime
-    completed_at: Optional[datetime]
-    duration_ms: Optional[int]
-    message: str
-    triggered_by: str
-    # Observability fields (small)
-    context_used: Optional[int] = None
-    context_max: Optional[int] = None
-    cost: Optional[float] = None
-    # Origin tracking (small) - AUDIT-001
-    source_user_id: Optional[int] = None
-    source_user_email: Optional[str] = None
-    source_agent_name: Optional[str] = None
-    source_mcp_key_id: Optional[str] = None
-    source_mcp_key_name: Optional[str] = None
-    # Session resume (small) - EXEC-023
-    claude_session_id: Optional[str] = None
-    # Model selection (small) - MODEL-001
-    model_used: Optional[str] = None
-    # Fan-out linkage (small) - FANOUT-001
-    fan_out_id: Optional[str] = None
-    # Validation tracking (small) - VALIDATE-001
-    business_status: Optional[str] = None  # pending_validation, validated, failed_validation, skipped
-    validation_execution_id: Optional[str] = None
-    # Auto-compact observability (Bundle B) - small JSON list
-    compact_metadata: Optional[str] = None
-
-    # EXCLUDED (large fields - fetch via /executions/{id}):
-    # - response: Optional[str]      # Full response text
-    # - error: Optional[str]         # Full error text
-    # - tool_calls: Optional[str]    # JSON array of tool calls
-    # - execution_log: Optional[str] # Full Claude Code transcript
-
-    class Config:
-        from_attributes = True
-
-
-class ExecutionResponse(BaseModel):
-    """Full response model for execution data - includes all fields.
-
-    Used by GET /api/agents/{name}/executions/{id} for single execution details.
-    """
-    id: str
-    schedule_id: str
-    agent_name: str
-    status: str
-    started_at: datetime
-    completed_at: Optional[datetime]
-    duration_ms: Optional[int]
-    message: str
-    response: Optional[str]
-    error: Optional[str]
-    triggered_by: str
-    # Observability fields
-    context_used: Optional[int] = None
-    context_max: Optional[int] = None
-    cost: Optional[float] = None
-    tool_calls: Optional[str] = None
-    execution_log: Optional[str] = None  # Full Claude Code execution transcript (JSON)
-    # Origin tracking - AUDIT-001
-    source_user_id: Optional[int] = None
-    source_user_email: Optional[str] = None
-    source_agent_name: Optional[str] = None
-    source_mcp_key_id: Optional[str] = None
-    source_mcp_key_name: Optional[str] = None
-    # Session resume - EXEC-023
-    claude_session_id: Optional[str] = None
-    # Model selection - MODEL-001
-    model_used: Optional[str] = None
-    # Fan-out linkage - FANOUT-001
-    fan_out_id: Optional[str] = None
-    # Validation tracking - VALIDATE-001
-    business_status: Optional[str] = None
-    validated_at: Optional[datetime] = None
-    validation_execution_id: Optional[str] = None
-    validates_execution_id: Optional[str] = None
-    # Auto-compact observability (Bundle B)
-    compact_metadata: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 # Schedule CRUD Endpoints
@@ -339,6 +208,34 @@ async def get_schedule_analytics(
             detail="Schedule not found",
         )
     return ScheduleAnalyticsResponse(**analytics)
+
+
+@router.get(
+    "/{name}/schedules/analytics-summary",
+    response_model=AgentSchedulesSummaryResponse,
+)
+async def get_agent_schedules_summary(
+    name: AuthorizedAgent,
+    window: str = Query("7d", description="One of 7d, 14d, 30d"),
+):
+    """Per-schedule performance rollups for the agent over a window (#1115).
+
+    ONE compact row per non-deleted schedule — consumed by BOTH the Overview
+    "Schedules performance" section and the Schedules-tab inline stats from a
+    single call (no N per-schedule round-trips). Zero-run schedules are
+    included. Read-only / DB-sourced (renders when the agent is stopped). The
+    #868 per-schedule deep view stays the drill-in target.
+
+    NOTE: declared BEFORE `/{name}/schedules/{schedule_id}` so the literal
+    `analytics-summary` segment isn't captured as a schedule_id (Invariant #4).
+    """
+    hours = _SUMMARY_WINDOW_HOURS.get(window)
+    if hours is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"window must be one of {sorted(_SUMMARY_WINDOW_HOURS)}",
+        )
+    return AgentSchedulesSummaryResponse(**db.get_agent_schedules_summary(name, hours))
 
 
 @router.get("/{name}/schedules/{schedule_id}", response_model=ScheduleResponse)
@@ -559,13 +456,6 @@ async def trigger_schedule(
 
 
 # Webhook Management Endpoints (WEBHOOK-001, #291)
-
-class WebhookStatusResponse(BaseModel):
-    """Webhook configuration for a schedule."""
-    schedule_id: str
-    has_token: bool
-    webhook_enabled: bool
-    webhook_url: Optional[str] = None
 
 
 def _build_webhook_url(request_base_url: str, token: str) -> str:

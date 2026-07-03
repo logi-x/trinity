@@ -240,7 +240,7 @@ class TestActivityCreation:
             # Verify agent name matches
             assert activity["agent_name"] == agent_name
             # Activity state should be valid
-            assert activity["activity_state"] in ["started", "completed", "failed"]
+            assert activity["activity_state"] in ["started", "completed", "failed", "cancelled"]
 
 
 class TestActivityTypes:
@@ -441,8 +441,11 @@ class TestTimelineForDashboard:
         assert_status(response, 200)
         activities = response.json().get("activities", [])
 
-        # Valid trigger types for Dashboard color coding
-        valid_triggers = {"schedule", "agent", "manual", "user", "mcp", "public", "fan_out", None}
+        # Valid trigger types for Dashboard color coding.
+        # #1260: include "loop" (#740/#1150) and "voip" (#1056) — real trigger
+        # values added after this test was written.
+        valid_triggers = {"schedule", "agent", "manual", "user", "mcp", "public",
+                          "fan_out", "loop", "voip", None}
 
         for activity in activities:
             triggered_by = activity.get("triggered_by")

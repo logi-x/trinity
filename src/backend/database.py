@@ -31,6 +31,7 @@ from db_models import (
     User,
     SessionMessageInsert,
     AgentShare,
+    AgentOperatorAccess,
     AgentShareRequest,
     McpApiKeyCreate,
     McpApiKey,
@@ -111,6 +112,7 @@ from db.schedules import ScheduleOperations
 from db.chat import ChatOperations
 from db.sessions import SessionOperations
 from db.activities import ActivityOperations
+from db.reports import ReportOperations
 from db.permissions import PermissionOperations
 from db.shared_folders import SharedFolderOperations
 from db.agent_shared_files import AgentSharedFilesOperations
@@ -136,6 +138,7 @@ from db.voip import VoipOperations
 from db.access_requests import AccessRequestOperations
 from db.audit import PlatformAuditOperations
 from db.canary import CanaryOperations
+from db.compatibility import CompatibilityOperations
 from db.sync_state import SyncStateOperations
 from db.idempotency import IdempotencyOperations
 from db.loops import LoopOperations
@@ -328,6 +331,7 @@ class DatabaseManager:
         self._chat_ops = ChatOperations()
         self._session_ops = SessionOperations()
         self._activity_ops = ActivityOperations()
+        self._report_ops = ReportOperations()
         self._permission_ops = PermissionOperations(self._user_ops, self._agent_ops)
         self._shared_folder_ops = SharedFolderOperations(self._permission_ops)
         self._agent_shared_files_ops = AgentSharedFilesOperations()
@@ -353,6 +357,7 @@ class DatabaseManager:
         self._access_request_ops = AccessRequestOperations()
         self._audit_ops = PlatformAuditOperations()
         self._canary_ops = CanaryOperations()
+        self._compatibility_ops = CompatibilityOperations()  # #668 agent compatibility
         self._sync_state_ops = SyncStateOperations()  # #389 sync health
         self._idempotency_ops = IdempotencyOperations()  # RELIABILITY-006, #525
         self._loop_ops = LoopOperations()  # #740 sequential agent loops
@@ -465,6 +470,9 @@ class DatabaseManager:
 
     def get_agent_shares(self, agent_name: str):
         return self._agent_ops.get_agent_shares(agent_name)
+
+    def get_agent_operator_access(self, agent_name: str):
+        return self._agent_ops.get_agent_operator_access(agent_name)
 
     def get_shared_agents(self, username: str):
         return self._agent_ops.get_shared_agents(username)
@@ -598,6 +606,12 @@ class DatabaseManager:
     def set_read_only_mode(self, agent_name: str, enabled: bool, config: dict = None):
         return self._agent_ops.set_read_only_mode(agent_name, enabled, config)
 
+    def get_full_capabilities(self, agent_name: str) -> bool:
+        return self._agent_ops.get_full_capabilities(agent_name)
+
+    def set_full_capabilities(self, agent_name: str, enabled: bool) -> bool:
+        return self._agent_ops.set_full_capabilities(agent_name, enabled)
+
     # =========================================================================
     # Agent Guardrails (GUARD-001)
     # =========================================================================
@@ -633,6 +647,25 @@ class DatabaseManager:
 
     def get_all_circuit_breaker_enabled(self):
         return self._agent_ops.get_all_circuit_breaker_enabled()
+
+    # =========================================================================
+    # MCP exposure toggle (#846)
+    # =========================================================================
+
+    def get_mcp_exposed(self, agent_name: str) -> bool:
+        return self._agent_ops.get_mcp_exposed(agent_name)
+
+    def set_mcp_exposed(self, agent_name: str, enabled: bool) -> bool:
+        return self._agent_ops.set_mcp_exposed(agent_name, enabled)
+
+    def get_mcp_exposed_agents(self):
+        return self._agent_ops.get_mcp_exposed_agents()
+
+    def get_tts_config(self, agent_name: str):
+        return self._agent_ops.get_tts_config(agent_name)
+
+    def set_tts_config(self, agent_name: str, enabled: bool, voice_id):
+        return self._agent_ops.set_tts_config(agent_name, enabled, voice_id)
 
     # =========================================================================
     # Execution Timeout (delegated to db/agents.py) - TIMEOUT-001
@@ -732,6 +765,23 @@ class DatabaseManager:
 
     def set_voice_system_prompt(self, agent_name: str, prompt: str):
         return self._agent_ops.set_voice_system_prompt(agent_name, prompt)
+
+    def get_voice_name(self, agent_name: str):
+        return self._agent_ops.get_voice_name(agent_name)
+
+    def set_voice_name(self, agent_name: str, voice_name):
+        return self._agent_ops.set_voice_name(agent_name, voice_name)
+    def get_public_channel_system_prompt(self, agent_name: str):
+        return self._agent_ops.get_public_channel_system_prompt(agent_name)
+
+    def set_public_channel_system_prompt(self, agent_name: str, prompt):
+        return self._agent_ops.set_public_channel_system_prompt(agent_name, prompt)
+
+    def get_public_channel_model(self, agent_name: str):
+        return self._agent_ops.get_public_channel_model(agent_name)
+
+    def set_public_channel_model(self, agent_name: str, model):
+        return self._agent_ops.set_public_channel_model(agent_name, model)
 
     # =========================================================================
     # MCP API Key Management (delegated to db/mcp_keys.py)
@@ -898,11 +948,14 @@ class DatabaseManager:
                                                           context_used, context_max, cost, tool_calls, execution_log, claude_session_id,
                                                           compact_metadata, retry_count)
 
-    def mark_execution_dispatched(self, execution_id: str) -> bool:
-        return self._schedule_ops.mark_execution_dispatched(execution_id)
+    def mark_execution_dispatched(self, execution_id: str, async_dispatch: bool = False) -> bool:
+        return self._schedule_ops.mark_execution_dispatched(execution_id, async_dispatch)
 
     def get_schedule_executions(self, schedule_id: str, limit: int = 50):
         return self._schedule_ops.get_schedule_executions(schedule_id, limit)
+
+    def get_latest_execution_per_schedule(self, schedule_ids: list):
+        return self._schedule_ops.get_latest_execution_per_schedule(schedule_ids)
 
     def get_agent_executions(self, agent_name: str, limit: int = 50):
         return self._schedule_ops.get_agent_executions(agent_name, limit)
@@ -1100,14 +1153,53 @@ class DatabaseManager:
     def get_activity(self, activity_id: str):
         return self._activity_ops.get_activity(activity_id)
 
+    def get_open_activity_id_for_execution(self, execution_id: str):
+        return self._activity_ops.get_open_activity_id_for_execution(execution_id)
+
     def get_agent_activities(self, agent_name: str, activity_type: str = None, activity_state: str = None, limit: int = 100):
         return self._activity_ops.get_agent_activities(agent_name, activity_type, activity_state, limit)
 
-    def get_activities_in_range(self, start_time: str = None, end_time: str = None, activity_types: list = None, limit: int = 100):
-        return self._activity_ops.get_activities_in_range(start_time, end_time, activity_types, limit)
+    def get_activities_in_range(self, start_time: str = None, end_time: str = None, activity_types: list = None, limit: int = 100, agent_names: list = None):
+        return self._activity_ops.get_activities_in_range(start_time, end_time, activity_types, limit, agent_names)
+
+    def get_latest_activity_for_agents(self, agent_names: list):
+        return self._activity_ops.get_latest_activity_for_agents(agent_names)
 
     def get_current_activities(self, agent_name: str):
         return self._activity_ops.get_current_activities(agent_name)
+
+    # =========================================================================
+    # Agent Report Methods (#918 — delegated to db/reports.py)
+    # =========================================================================
+
+    def create_report(self, agent_name, user_id, report_type, title, payload,
+                       display_hint=None, schema_version=1,
+                       period_start=None, period_end=None):
+        return self._report_ops.create_report(
+            agent_name, user_id, report_type, title, payload,
+            display_hint, schema_version, period_start, period_end,
+        )
+
+    def get_report(self, report_id: str):
+        return self._report_ops.get_report(report_id)
+
+    def get_reports_for_agent(self, agent_name: str, report_type: str = None,
+                              limit: int = 50, offset: int = 0):
+        return self._report_ops.get_reports_for_agent(agent_name, report_type, limit, offset)
+
+    def get_fleet_reports(self, agent_names, report_type: str = None, hours: int = None,
+                          search: str = None, limit: int = 50, offset: int = 0):
+        return self._report_ops.get_fleet_reports(
+            agent_names, report_type, hours, search, limit, offset)
+
+    def get_fleet_report_stats(self, agent_names, report_type: str = None, hours: int = None):
+        return self._report_ops.get_fleet_report_stats(agent_names, report_type, hours)
+
+    def delete_report(self, agent_name: str, report_id: str):
+        return self._report_ops.delete_report(agent_name, report_id)
+
+    def prune_agent_reports(self, retention_days: int = 90, chunk_size: int = 1000):
+        return self._report_ops.prune_agent_reports(retention_days, chunk_size)
 
     # =========================================================================
     # Cleanup Operations (for CleanupService)
@@ -1117,9 +1209,11 @@ class DatabaseManager:
         """Get all schedule executions currently in 'running' status."""
         return self._schedule_ops.get_running_executions()
 
-    def mark_stale_executions_failed(self, timeout_minutes: int = 30):
+    def mark_stale_executions_failed(self, timeout_minutes: int = 30, agent_timeouts=None, buffer_seconds: int = 0):
         """Mark executions stuck in 'running' past threshold as failed."""
-        return self._schedule_ops.mark_stale_executions_failed(timeout_minutes)
+        return self._schedule_ops.mark_stale_executions_failed(
+            timeout_minutes, agent_timeouts=agent_timeouts, buffer_seconds=buffer_seconds
+        )
 
     def mark_no_session_executions_failed(self, timeout_seconds: int = 60):
         """Mark running executions with no claude_session_id as failed (Issue #106)."""
@@ -1523,6 +1617,9 @@ class DatabaseManager:
     def list_subscriptions(self, owner_id: int = None):
         return self._subscription_ops.list_subscriptions(owner_id)
 
+    def has_any_subscription(self):
+        return self._subscription_ops.has_any_subscription()
+
     def list_subscriptions_with_agents(self, owner_id: int = None):
         return self._subscription_ops.list_subscriptions_with_agents(owner_id)
 
@@ -1666,6 +1763,9 @@ class DatabaseManager:
     def get_agent_analytics(self, agent_name: str, hours: int):
         return self._schedule_ops.get_agent_analytics(agent_name, hours)
 
+    def get_agent_schedules_summary(self, agent_name: str, hours: int):
+        return self._schedule_ops.get_agent_schedules_summary(agent_name, hours)
+
     def get_agent_token_stats(self, agent_name: str):
         return self._schedule_ops.get_agent_token_stats(agent_name)
 
@@ -1768,6 +1868,9 @@ class DatabaseManager:
     def get_slack_channel_for_agent(self, team_id, agent_name):
         return self._slack_channel_ops.get_channel_for_agent(team_id, agent_name)
 
+    def get_slack_channels_for_agent(self, agent_name):
+        return self._slack_channel_ops.get_channels_for_agent(agent_name)
+
     def unbind_slack_agent(self, team_id, agent_name):
         return self._slack_channel_ops.unbind_agent(team_id, agent_name)
 
@@ -1813,6 +1916,9 @@ class DatabaseManager:
 
     def increment_telegram_message_count(self, chat_link_id):
         return self._telegram_channel_ops.increment_message_count(chat_link_id)
+
+    def list_telegram_clients_for_agent(self, agent_name):
+        return self._telegram_channel_ops.list_clients_for_agent(agent_name)
 
     def get_telegram_verified_email(self, binding_id, telegram_user_id):
         return self._telegram_channel_ops.get_verified_email(binding_id, telegram_user_id)
@@ -1907,6 +2013,9 @@ class DatabaseManager:
     def increment_whatsapp_message_count(self, chat_link_id):
         return self._whatsapp_channel_ops.increment_message_count(chat_link_id)
 
+    def list_whatsapp_clients_for_agent(self, agent_name):
+        return self._whatsapp_channel_ops.list_clients_for_agent(agent_name)
+
     # =========================================================================
     # VoIP Telephony (delegated to db/voip.py) - VOIP-001 (#1056)
     # =========================================================================
@@ -1937,6 +2046,9 @@ class DatabaseManager:
 
     def delete_voip_binding(self, agent_name):
         return self._voip_ops.delete_binding(agent_name)
+
+    def set_voip_enabled(self, agent_name, enabled):
+        return self._voip_ops.set_enabled(agent_name, enabled)
 
     def create_voip_call_log(self, call_id, agent_name, to_number, chat_session_id=None,
                             initiated_by_user_id=None, initiated_by_email=None,
@@ -2207,6 +2319,22 @@ class DatabaseManager:
     def get_canary_stats(self, start_time: str = None, end_time: str = None):
         """Aggregate canary violation counts by invariant_id and severity."""
         return self._canary_ops.stats_by_invariant(start_time=start_time, end_time=end_time)
+
+    # =========================================================================
+    # Agent compatibility results (#668 — delegated to db/compatibility.py)
+    # =========================================================================
+
+    def upsert_compatibility_result(self, agent_name: str, **kwargs):
+        """Upsert the latest compatibility snapshot for an agent. See CompatibilityOperations."""
+        return self._compatibility_ops.upsert_result(agent_name, **kwargs)
+
+    def get_compatibility_result(self, agent_name: str):
+        """Fetch the latest persisted compatibility report for an agent (or None)."""
+        return self._compatibility_ops.get_result(agent_name)
+
+    def count_agents_with_hard_compatibility_findings(self) -> int:
+        """Fleet aggregation: number of agents with ≥1 HARD compatibility finding."""
+        return self._compatibility_ops.count_agents_with_hard_findings()
 
     # =========================================================================
     # Idempotency keys (RELIABILITY-006, #525 — delegated to db/idempotency.py)
