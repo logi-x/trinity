@@ -50,9 +50,10 @@ Trinity Enterprise submodule not present — OSS-only build (this is normal; ent
 ## Mounting the enterprise submodule (entitled customers)
 
 > `update = none` means git skips this submodule on *every* plain
-> `git submodule update`, including `--init` — and a one-shot
-> `--init --checkout` copies `none` into your local config, so later updates
-> would silently skip again. Set the local override **first**; it is durable.
+> `git submodule update`, including `--init` — and **any** init path (plain
+> `--init`, one-shot `--init --checkout`, `clone --recurse-submodules`) copies
+> `none` into your local config, so later updates keep skipping. Set the local
+> override **first**; it is durable and wins over `.gitmodules`.
 
 ### 1. Set the durable local override
 
@@ -82,15 +83,31 @@ The URL override lives only in your clone's `.git/config` — never commit a
 token anywhere. Prefer a credential helper over embedding the token in the URL
 where possible.
 
-### 3. Rebuild and restart the backend
+### 3. Get the code into the container
 
-The backend image copies the source tree at build time, so mounting the
-submodule requires a rebuild:
+The enterprise tree reaches the backend via a **bind-mount**, never the image —
+the backend Dockerfile copies an explicit allowlist that excludes
+`enterprise/`, keeping the published image bit-identical to the OSS build.
+What to do depends on your stack:
+
+**Dev stack (`docker-compose.yml`)** — it already bind-mounts `./src/backend`
+into `/app`, so the freshly-initialized submodule is inside the mount. Just
+restart the backend:
 
 ```bash
-docker-compose build backend
-./scripts/deploy/start.sh
+docker compose restart backend
 ```
+
+**Prod stack (`docker-compose.prod.yml`)** — there is no source mount; add the
+enterprise overlay (which bind-mounts `./src/backend/enterprise` read-only
+into `/app/enterprise`) to **every** compose invocation:
+
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.prod.enterprise.yml up -d backend
+```
+
+See the comments in `docker-compose.prod.enterprise.yml` for the full
+build/update recipe.
 
 ### 4. Verify
 

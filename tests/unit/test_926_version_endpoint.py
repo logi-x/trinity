@@ -159,6 +159,15 @@ def test_version_payload_passes_edition_and_features_through():
     assert ent["edition"] == "enterprise"
     assert ent["enterprise_features"] == ["module-a", "module-b"]
 
+    # Deliberately MISMATCHED pair: if the builder re-derived edition from
+    # the features list (instead of passing it through), this would flip to
+    # "enterprise" and fail — pinning the pure-passthrough property the
+    # docstring claims (review F5).
+    mismatched = build(
+        voice_enabled=False, edition="oss", enterprise_features=["module-a"]
+    )
+    assert mismatched["edition"] == "oss"
+
 
 def test_version_payload_runtimes_lists_all_shipped_runtimes():
     """#1187/#1443 drive-by: the hardcoded runtimes list had gone stale

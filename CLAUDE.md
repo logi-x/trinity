@@ -87,7 +87,7 @@ git submodule update --init .claude           # now actually clones (needs trini
 git config submodule.recurse true             # auto-syncs .claude when switching branches
 ```
 
-The config line must come **first** — with the `update = none` default, a plain `--init` is skipped, and a one-shot `--init --checkout` would copy `none` into your local config so *future* updates silently skip again. Without `submodule.recurse true`, switching branches will leave `.claude` stale and skills will disappear. The `fetchRecurseSubmodules = true` in `.gitmodules` handles `git pull` automatically, but branch switching requires the local config above. (Clones initialized before #1443 already carry the `update = checkout` local override — no action needed.)
+The config line must come **first** — with the `update = none` default, a plain `--init` is skipped, and **any** init path (plain `--init`, `--init --checkout`, `clone --recurse-submodules`) copies `none` into your local config, so *future* updates keep skipping until the override is set. Without `submodule.recurse true`, switching branches will leave `.claude` stale and skills will disappear. The `fetchRecurseSubmodules = true` in `.gitmodules` handles `git pull` automatically, but branch switching requires the local config above. (Clones initialized before #1443 already carry the `update = checkout` local override — no action needed.)
 
 ### External contributors
 
