@@ -853,7 +853,7 @@ Token lifecycle: `secrets.token_urlsafe(32)` stored in `agent_schedules.webhook_
 | POST/GET/DELETE | `/api/mcp/keys` (`/{id}`) | Create / list / delete API keys |
 | GET | `/oauth/{provider}/authorize` / `/callback` | OAuth start / callback |
 | GET | `/health` | Health check (unauthenticated, top-level — no `/api/` prefix) |
-| GET | `/api/version` | Platform version + build-time git provenance (`git_commit`, `git_commit_short`, `git_commit_subject`, `git_commit_timestamp`, `git_branch`, `build_date`) from Dockerfile ARG/ENV wired through compose build args + `start.sh`; all default `"unknown"` when absent (#926) |
+| GET | `/api/version` | Platform version + build-time git provenance (`git_commit`, `git_commit_short`, `git_commit_subject`, `git_commit_timestamp`, `git_branch`, `build_date`) from Dockerfile ARG/ENV wired through compose build args + `start.sh`; all default `"unknown"` when absent (#926). Also `edition: "oss"\|"enterprise"` + `enterprise_features` — effective entitlement state from `entitlement_service.list_entitled_features()`, same source as feature-flags (#1443) |
 
 ### Soft-Delete Admin Recovery (#834 Phase 1c)
 | Method | Path | Auth | Description |
@@ -964,6 +964,8 @@ Coverage: agent lifecycle, auth, sharing, credentials, settings, rename; request
 ### Enterprise Modules (#847)
 
 Open-core seam (generic mechanism only). The public backend exposes an extension point: `main.py` conditionally `register_enterprise(app)` (no-op `ImportError` in OSS-only builds); each registered module calls `entitlement_service.register_module("<id>")`, and the registry drives `feature-flags → enterprise_features`, which the OSS Vue bundle reads to show/hide gated surfaces. `requires_entitlement("<id>")` in `dependencies.py` gates an entitled endpoint (403 unentitled; 404 when the submodule is absent). `TRINITY_OSS_ONLY=1` hard-empties the registry. Private enterprise tables migrate via the separate two-track runner (Invariant #3).
+
+Install/verification surface (#1443): both private submodules carry `update = none` in `.gitmodules` — OSS clones init without credentials; mounting is a config-first per-clone opt-in (`git config submodule.<path>.update checkout`, then init) documented in `docs/ENTERPRISE.md` (mount, HTTPS-PAT override, rebuild, verify). `GET /api/version` reports `edition` + `enterprise_features` from the same registry.
 
 > The catalog of specific enterprise modules, their private schema, and the commercial rationale are intentionally **not** documented in this public repo — they live in the private `trinity-enterprise` repository (see `docs/memory/ENTERPRISE_DOCS.md` there). Public docs describe the generic seam only.
 
