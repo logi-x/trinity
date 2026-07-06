@@ -1023,6 +1023,10 @@ class DatabaseManager:
     def get_git_config(self, agent_name: str):
         return self._schedule_ops.get_git_config(agent_name)
 
+    def get_git_config_agent_names_for_repo(self, github_repo: str):
+        """trinity-enterprise#93: fork-to-own destination-binding guard."""
+        return self._schedule_ops.get_git_config_agent_names_for_repo(github_repo)
+
     def update_git_sync(self, agent_name: str, commit_sha: str):
         return self._schedule_ops.update_git_sync(agent_name, commit_sha)
 

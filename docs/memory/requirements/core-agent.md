@@ -61,6 +61,20 @@
 - **Status**: ✅ Implemented
 - **Description**: Read template.yaml for display name, description, resources, credentials
 
+### 4.4 Fork-to-Own Templates (trinity-enterprise#93)
+- **Status**: ✅ Implemented (2026-07-06)
+- **Description**: A GitHub template can declare `fork_to_own: required` in its `template.yaml`; creating an agent from it copies the template into a repo the **user owns** (private by default) and the agent's `origin` points there — captures, operator Push, and auto-sync write to the user's repo, never the shared upstream template. Cornelius is the first user; the mechanism is template-generic.
+- **Key Features**:
+  - `POST /api/agents` accepts an optional `fork_to_own` block: `{destination_repo: "owner/name", github_pat (SecretStr), private: true}`. The copy (repo creation + push of the template's default branch with full history) runs under the **user's PAT** — the platform PAT is read-only for the template clone.
+  - Backend enforces `fork_to_own: required` (400 `FORK_TO_OWN_REQUIRED` without the block) so MCP/CLI paths can't silently create upstream-pointed agents. `@branch` template syntax and `local:` templates are rejected with the block (400).
+  - Privacy: destination repo is **private by default**; public requires an explicit `private: false` the UI gates behind a loud warning.
+  - The user PAT is persisted as the agent's per-agent PAT (#347, AES-256-GCM) so recreates re-bake it — the agent never falls back to the platform PAT.
+  - Destination collision handling: non-empty repo → 409 `FORK_DESTINATION_EXISTS`, unless its only branch head matches the template tip (retry-safe reuse); repo already bound to a live agent → 409 `FORK_DESTINATION_IN_USE`; empty repo (incl. pre-created without README) is reused.
+  - `upstream` remote auto-added in the agent workspace (credential-less, public templates) so `git pull upstream main` adopts template improvements; `GIT_UPSTREAM_REPO` env var baked at creation.
+  - Fork-to-own agents are pinned to source mode (origin main = the brain) with the 15-min auto-sync heartbeat enabled (pushing to your own main is the point).
+  - Create Agent modal renders templates carrying `fork_to_own` as **featured cards** (tagline surfaced from template.yaml) with destination/PAT/visibility fields.
+- **Out of scope (v1)**: MCP `create_agent` tool does not accept `fork_to_own` (tool args are audit-logged — a PAT arg would persist in plaintext); PAT expiry/rotation UX (sync-health alerts detect push failures); upstream-update UI affordance.
+
 ---
 
 ## 5. Agent Chat & Terminal

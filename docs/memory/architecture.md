@@ -184,7 +184,8 @@
 
 *Git & GitHub:*
 - `git_service.py` - Git sync operations for GitHub-native agents; persistent-state allowlist primitive (S4, #383)
-- `github_service.py` - GitHub API client (repo creation, validation, org detection)
+- `github_service.py` - GitHub API client (repo creation, validation, org detection, branch listing)
+- `agent_service/fork_to_own.py` - Fork-to-own template copy (trinity-enterprise#93): a template declaring `fork_to_own: required` is copied at creation into a **user-owned** repo (private by default; the user's PAT creates + pushes, then persists as the per-agent PAT #347 so recreates never fall back to the platform PAT). Origin = the user's repo; `GIT_UPSTREAM_REPO` env + a credential-less `upstream` remote (startup.sh) keep template updates one `git pull upstream` away. Destination collisions: empty or template-tip SHA-match → reuse; already bound to a live agent or holding other data → 409
 
 *Integrations:*
 - `slack_service.py` - Slack API client (OAuth, messaging, verification) (SLACK-001)
