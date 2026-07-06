@@ -58,11 +58,16 @@
           <b v-else class="na">&mdash;</b>
         </div>
         <div v-if="!analytics && analyticsPending" class="chartbox skeleton"></div>
-        <div v-else-if="activityDays.length && activityTotal > 0" class="stack">
+        <!-- Empty days keep a faint baseline stub so sparse data reads as a
+             14-day rhythm instead of a lone bar floating in a void. -->
+        <div v-else-if="activityDays.length" class="stack">
           <span v-for="(d, i) in activityDays" :key="i" class="col" :title="d.date + ' — ' + d.total + ' runs'">
-            <i v-if="d.sched" class="bs" :style="{ height: d.schedPx + 'px' }"></i>
-            <i v-if="d.man" class="bm" :style="{ height: d.manPx + 'px' }"></i>
-            <i v-if="d.ext" class="be" :style="{ height: d.extPx + 'px' }"></i>
+            <template v-if="d.total > 0">
+              <i v-if="d.sched" class="bs" :style="{ height: d.schedPx + 'px' }"></i>
+              <i v-if="d.man" class="bm" :style="{ height: d.manPx + 'px' }"></i>
+              <i v-if="d.ext" class="be" :style="{ height: d.extPx + 'px' }"></i>
+            </template>
+            <i v-else class="stub"></i>
           </span>
         </div>
         <div v-else class="stack flat"><span class="flatline"></span></div>
@@ -253,16 +258,17 @@ const chips = computed(() => {
   if (sh && sh.last_sync_status === 'failed' && sh.consecutive_failures > 0) {
     out.push({ kind: 'warn', icon: '⟳', text: `sync failing ×${sh.consecutive_failures}`, title: sh.last_error_summary || 'Git sync failing' })
   }
-  // Calm facts after problems.
+  // Calm facts after problems. The system agent gets these too — an empty
+  // chip row leaves a visual void on the tile.
   const total = stats.value?.schedulesTotal || 0
   const enabled = stats.value?.schedulesEnabled || 0
   if (total > 0) {
-    if (props.agent.autonomy_enabled) {
+    if (props.agent.autonomy_enabled || isSystemAgent.value) {
       out.push({ kind: 'calm', text: `${enabled}/${total} schedules` })
     } else {
       out.push({ kind: 'calm', text: 'schedules paused' })
     }
-  } else if (!isSystemAgent.value) {
+  } else {
     out.push({ kind: 'calm', text: 'no schedules' })
   }
   if (sh && sh.auto_sync_enabled && sh.last_sync_status === 'success') {
@@ -323,7 +329,12 @@ const contextMax = computed(() => ctxStats.value?.contextMax || 200000)
 const contextHeadline = computed(() => {
   if (!isRunning.value) return null
   const pct = ctxStats.value?.contextPercent
-  return pct == null ? null : Math.round(pct)
+  if (pct == null) return null
+  const rounded = Math.round(pct)
+  // 0% with no daily history means "nothing tracked yet" — show the empty
+  // dash rather than a numeric zero over a bare baseline.
+  if (rounded === 0 && contextSeries.value.length === 0) return null
+  return rounded
 })
 
 const contextLevelClass = computed(() => {
@@ -650,6 +661,12 @@ watch(
 .stack .col i.bs { background: var(--gv-bk-sched); }
 .stack .col i.bm { background: var(--gv-bk-man); }
 .stack .col i.be { background: var(--gv-bk-ext); }
+/* faint baseline stub for a day with zero executions */
+.stack .col i.stub {
+  height: 2px;
+  background: var(--gv-bar-track);
+  opacity: 0.7;
+}
 .stack.flat {
   align-items: center;
 }
@@ -680,13 +697,15 @@ watch(
 .ctxdot.info { fill: var(--gv-blue); }
 .ctxdot.mid { fill: var(--gv-yellow); }
 .ctxdot.hot { fill: var(--gv-red); }
+/* empty context state: baseline at the bottom (mid-height read as a divider) */
 .ctxflat {
   height: 2px;
   width: 100%;
   background: var(--gv-bar-track);
   border-radius: 2px;
   position: absolute;
-  top: 50%;
+  bottom: 3px;
+  opacity: 0.7;
 }
 
 /* Zone 4: success + stats */

@@ -568,7 +568,19 @@ onBeforeUnmount(() => {
   --gv-bk-man: #14b8a6;
   --gv-bk-ext: #ec4899;
   --gv-dots: rgba(17, 24, 39, 0.12);
-  --gv-tile-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  /* Layered depth: top-edge highlight (glass lip) + tight contact shadow +
+     mid key shadow + soft ambient falloff. */
+  --gv-tile-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 55%);
+  --gv-tile-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 1px 2px rgba(23, 24, 28, 0.08),
+    0 5px 10px -3px rgba(23, 24, 28, 0.12),
+    0 18px 36px -14px rgba(23, 24, 28, 0.22);
+  --gv-tile-shadow-hover:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 2px 4px rgba(23, 24, 28, 0.1),
+    0 10px 18px -4px rgba(23, 24, 28, 0.16),
+    0 26px 48px -16px rgba(23, 24, 28, 0.28);
   --gv-drag-shadow: 0 24px 48px -12px rgba(23, 24, 28, 0.35);
 
   position: relative;
@@ -618,7 +630,17 @@ onBeforeUnmount(() => {
   --gv-bk-ext: #f472b6;
   --gv-dots: rgba(249, 250, 251, 0.08);
   --gv-drag-shadow: 0 28px 56px -12px rgba(0, 0, 0, 0.75);
-  --gv-tile-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+  --gv-tile-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 55%);
+  --gv-tile-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 6px 12px -4px rgba(0, 0, 0, 0.5),
+    0 22px 44px -18px rgba(0, 0, 0, 0.75);
+  --gv-tile-shadow-hover:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 2px 4px rgba(0, 0, 0, 0.5),
+    0 12px 20px -6px rgba(0, 0, 0, 0.55),
+    0 30px 56px -18px rgba(0, 0, 0, 0.8);
 
   background-color: #111827;
 }
@@ -645,7 +667,8 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 0;
   left: 0;
-  background: var(--gv-tile);
+  background-color: var(--gv-tile);
+  background-image: var(--gv-tile-sheen);
   border: 1px solid var(--gv-border-soft);
   border-radius: 12px;
   box-shadow: var(--gv-tile-shadow);
@@ -657,7 +680,7 @@ onBeforeUnmount(() => {
   z-index: 2;
 }
 .gv-tile:hover {
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.12), 0 4px 6px -4px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--gv-tile-shadow-hover);
 }
 .gv-tile:focus-visible {
   outline: 2px solid var(--gv-blue);
@@ -682,7 +705,7 @@ onBeforeUnmount(() => {
   100% { box-shadow: 0 0 0 12px transparent, var(--gv-tile-shadow); }
 }
 .gv-tile.system {
-  background: var(--gv-sys-tile);
+  background-color: var(--gv-sys-tile);
   border-color: var(--gv-sys-border);
 }
 
