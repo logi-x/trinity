@@ -73,10 +73,14 @@ import { renderMarkdown } from '@/utils/markdown'
 
 const props = defineProps({
   agent: { type: Object, required: true },   // { name, owner }
+  // Pluggable send: (agentName, text) => Promise<{response, cost}>. Defaults to
+  // the operator OSS chat; the public /portal passes the portal-session send.
+  sendMessage: { type: Function, default: null },
 })
 defineEmits(['close'])
 
 const agentsStore = useAgentsStore()
+const doSend = props.sendMessage || agentsStore.sendChatMessage
 const messages = ref([])
 const input = ref('')
 const sending = ref(false)
@@ -99,7 +103,7 @@ async function send() {
   sending.value = true
   await scrollDown()
   try {
-    const data = await agentsStore.sendChatMessage(props.agent.name, text)
+    const data = await doSend(props.agent.name, text)
     messages.value.push({ role: 'assistant', content: data.response || '(no response)' })
   } catch (err) {
     error.value = err.response?.data?.detail || 'Message failed. The agent may be stopped.'

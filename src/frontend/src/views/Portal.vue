@@ -102,23 +102,32 @@
             <div class="mt-3 flex items-center justify-between">
               <span class="text-[11px] text-gray-400"><span v-if="a.shared_at">shared {{ formatDate(a.shared_at) }}</span></span>
               <button
-                class="text-xs px-2.5 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-not-allowed"
-                disabled
-                title="Chat over a portal session arrives in the next slice"
-              >Chat — soon</button>
+                class="text-xs px-2.5 py-1 rounded-md bg-action-primary-600 hover:bg-action-primary-700 text-white"
+                @click="chatAgent = a"
+              >Chat</button>
             </div>
           </div>
         </div>
       </div>
     </main>
+
+    <!-- Chat drawer over the portal session (roster-scoped, gated endpoint) -->
+    <PortalChat
+      v-if="chatAgent"
+      :agent="chatAgent"
+      :send-message="(name, msg) => store.sendPortalChat(name, msg)"
+      @close="chatAgent = null"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useClientPortalStore } from '@/stores/clientPortal'
+import PortalChat from '@/views/enterprise/PortalChat.vue'
 
 const store = useClientPortalStore()
+const chatAgent = ref(null)
 const step = ref('email')
 const email = ref('')
 const code = ref('')

@@ -58,6 +58,19 @@ export const useClientPortalStore = defineStore('clientPortal', {
       localStorage.removeItem(PORTAL_TOKEN_KEY)
     },
 
+    // Chat one turn with a rostered agent over the portal session (the gated,
+    // roster-scoped endpoint — the OSS chat endpoint fences the portal token).
+    // Returns the same `{response, cost}` shape as agentsStore.sendChatMessage
+    // so PortalChat.vue can consume either.
+    async sendPortalChat(agentName, message) {
+      const { data } = await axios.post(
+        `/api/enterprise/client-portal/agents/${agentName}/chat`,
+        { message },
+        { headers: this.authHeader }
+      )
+      return data
+    },
+
     async fetchRoster() {
       this.loading = true
       this.error = null
