@@ -71,6 +71,16 @@ export const useClientPortalStore = defineStore('clientPortal', {
       return data
     },
 
+    // Files a rostered agent has shared (FILES-001), each with a download URL
+    // (`?sig=` token is the credential — the download route is public).
+    async fetchDocuments(agentName) {
+      const { data } = await axios.get(
+        `/api/enterprise/client-portal/agents/${agentName}/documents`,
+        { headers: this.authHeader }
+      )
+      return data.documents || []
+    },
+
     async fetchRoster() {
       this.loading = true
       this.error = null

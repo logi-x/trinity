@@ -101,10 +101,16 @@
             </div>
             <div class="mt-3 flex items-center justify-between">
               <span class="text-[11px] text-gray-400"><span v-if="a.shared_at">shared {{ formatDate(a.shared_at) }}</span></span>
-              <button
-                class="text-xs px-2.5 py-1 rounded-md bg-action-primary-600 hover:bg-action-primary-700 text-white"
-                @click="chatAgent = a"
-              >Chat</button>
+              <div class="flex items-center gap-2">
+                <button
+                  class="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  @click="docsAgent = a"
+                >Files</button>
+                <button
+                  class="text-xs px-2.5 py-1 rounded-md bg-action-primary-600 hover:bg-action-primary-700 text-white"
+                  @click="chatAgent = a"
+                >Chat</button>
+              </div>
             </div>
           </div>
         </div>
@@ -118,6 +124,13 @@
       :send-message="(name, msg) => store.sendPortalChat(name, msg)"
       @close="chatAgent = null"
     />
+
+    <!-- Documents drawer — files a rostered agent has shared -->
+    <PortalDocuments
+      v-if="docsAgent"
+      :agent="docsAgent"
+      @close="docsAgent = null"
+    />
   </div>
 </template>
 
@@ -125,9 +138,11 @@
 import { ref, onMounted } from 'vue'
 import { useClientPortalStore } from '@/stores/clientPortal'
 import PortalChat from '@/views/enterprise/PortalChat.vue'
+import PortalDocuments from '@/views/enterprise/PortalDocuments.vue'
 
 const store = useClientPortalStore()
 const chatAgent = ref(null)
+const docsAgent = ref(null)
 const step = ref('email')
 const email = ref('')
 const code = ref('')
