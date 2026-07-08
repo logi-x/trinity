@@ -27,6 +27,16 @@
         ]">{{ uploadMsg.text }}</p>
       </div>
 
+      <!-- How files work — keeps expectations straight (files persist; they're
+           not force-fed into every message). -->
+      <details class="px-4 py-2 border-b border-gray-200 dark:border-gray-800 text-xs text-gray-500 dark:text-gray-400">
+        <summary class="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200">How do files work?</summary>
+        <div class="mt-2 space-y-1.5 leading-relaxed">
+          <p>Files you send are kept in <span class="font-medium">{{ agent.name }}</span>'s inbox and stay there for the rest of your conversations — you don't need to re-send them.</p>
+          <p>They're <span class="font-medium">not pasted into every message</span>. The agent is told which files are in your inbox and opens documents when they're relevant. For an <span class="font-medium">image</span>, just mention it (“look at the photo I sent”) and it's shown to the agent for that message.</p>
+        </div>
+      </details>
+
       <div class="flex-1 overflow-y-auto p-4 space-y-6">
         <div v-if="loading" class="text-center py-12">
           <div class="animate-spin rounded-full h-7 w-7 border-b-2 border-action-primary-500 mx-auto"></div>
