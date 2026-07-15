@@ -1,5 +1,3 @@
-# Canonical source: github:logi-x/logix-sage (checkout: /home/logix/logix-agents/logix-sage)
-# This local: mirror is for bootstrap / template bind only — edit the GitHub repo.
 name: sage
 display_name: Sage - Strategic Advisor
 description: |

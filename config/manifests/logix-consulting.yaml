@@ -7,7 +7,7 @@
 #   POST /api/agents/{each}/permissions/cornelius
 
 name: logix
-description: Logix Consulting AI Team - Atlas, Scout, Sage, Scribe
+description: Logix Consulting AI Team - governed research, strategy, concepts, and deliverables
 
 agents:
   atlas:
@@ -46,6 +46,33 @@ agents:
       memory: 2g
       cpu: "1"
 
+  sentinel:
+    template: github:logi-x/logix-sentinel
+    folders:
+      expose: true
+      consume: true
+    resources:
+      memory: 2g
+      cpu: "1"
+
+  steward:
+    template: github:logi-x/logix-steward
+    folders:
+      expose: true
+      consume: true
+    resources:
+      memory: 2g
+      cpu: "1"
+
+  forge:
+    template: github:logi-x/logix-forge
+    folders:
+      expose: true
+      consume: true
+    resources:
+      memory: 2g
+      cpu: "1"
+
 permissions:
   preset: full-mesh
 
@@ -59,11 +86,17 @@ trinity_prompt: |
   - Scout (logix-scout): Market research analyst
   - Sage (logix-sage): Strategic advisor
   - Scribe (logix-scribe): Content writer
+  - Sentinel (logix-sentinel): Evidence and final-deliverable verifier
+  - Steward (logix-steward): Task ledger, lifecycle, blockers, and approvals
+  - Forge (logix-forge): Product and solution concept architect
   - Cornelius (cornelius): Second brain / institutional memory (when present)
 
   Collaborate effectively:
-  1. Prefer specialists for their domain; Atlas handles ad-hoc and multi-domain routing
-  2. Check shared folders for team outputs
-  3. Use Trinity MCP to communicate with teammates
-  4. Save work to shared-out for others to access
-  5. Ask Cornelius for known Logix client/org facts before inventing them
+  1. Obtain a stable task ID from Steward before multi-stage work
+  2. Follow contracts/ARTIFACT-CONTRACT.md for every handoff
+  3. Prefer specialists for their domain; Atlas handles ad-hoc and multi-domain routing
+  4. Check shared folders and use Trinity MCP to communicate with teammates
+  5. Route factual research through Sentinel before strategy uses it
+  6. Route final evidence-bearing deliverables through Sentinel before approval
+  7. Ask Cornelius for known Logix client/org facts before inventing them
+  8. Promote only approved facts, decisions, and final artifacts into Cornelius

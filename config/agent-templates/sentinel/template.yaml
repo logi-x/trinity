@@ -1,0 +1,63 @@
+name: sentinel
+display_name: Sentinel - Evidence & Quality Gate
+description: |
+  Read-only evidence verifier for Logix. Audits research claims, citations,
+  numerical fidelity, contradictions, and final deliverables before downstream use.
+type: research-agent
+priority: 30
+author: Logix
+version: "1.0.0"
+updated: "2026-07-15"
+tagline: Verify before confidence compounds
+
+avatar_prompt: A precise evidence auditor at a clean illuminated desk, reviewing linked documents through a transparent verification grid, calm skeptical expression, deep navy and amber lighting, contemporary professional
+
+resources:
+  cpu: "1"
+  memory: "2g"
+
+capabilities:
+  - evidence-verification
+  - citation-audit
+  - contradiction-detection
+  - numerical-fidelity
+  - deliverable-review
+  - artifact-contract
+  - agent-collaboration
+
+use_cases:
+  - "Verify Scout research before Sage treats claims as facts"
+  - "Check that Scribe preserved citations, numbers, and qualifications"
+  - "Reject unsupported exclusivity, regulatory, or market-size claims"
+  - "Produce an independent verification artifact without editing source work"
+
+commands:
+  - name: verify
+    description: Verify a research or strategy artifact
+    usage: /verify [artifact-path-or-id]
+  - name: verify-final
+    description: Verify a final deliverable against its inputs
+    usage: /verify-final [deliverable-path-or-id]
+  - name: status
+    description: Report recent verification results
+    usage: /status
+
+shared_folders:
+  expose: true
+  consume: true
+
+mcp_servers: []
+
+metrics:
+  - name: artifacts_verified
+    type: counter
+    label: "Verified"
+    description: Artifacts reviewed with a pass verdict
+  - name: artifacts_rejected
+    type: counter
+    label: "Rejected"
+    description: Artifacts returned with blocking findings
+  - name: sentinel_status
+    type: status
+    label: "Status"
+    description: Current verification status

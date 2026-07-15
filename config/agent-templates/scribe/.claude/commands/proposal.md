@@ -1,16 +1,13 @@
 ---
-description: Draft a client proposal for a Logix engagement
-argument-hint: "[client] [engagement-type]"
-allowed-tools: Read, Write, Glob, Bash, mcp__trinity__*
+description: Draft a sourced client proposal
+argument-hint: "[task-id] [client] [engagement-type]"
+allowed-tools: Read, Write, Glob, Bash(mkdir:*), mcp__trinity__*
 ---
 
 # Proposal
 
-Draft proposal for: **$ARGUMENTS**
-
-## Steps
-
-1. Pull client context from Cornelius when available; use Scout/Sage packs if present.
-2. Include: executive summary, understanding of needs, approach, deliverables, timeline, investment (placeholders if unknown).
-3. Save to `/home/developer/shared-out/deliverables/proposals/{YYYY-MM-DD}-{client-slug}-proposal.md`.
-4. Reply with path + scope snapshot.
+1. Confirm task state and acceptance criteria with Steward.
+2. Pull approved client facts from Cornelius and verified evidence from Sentinel-reviewed artifacts.
+3. Draft scope, approach, deliverables, dependencies, timeline, assumptions, and placeholders for unknown commercial terms.
+4. Save a contract-compliant draft to `/home/developer/shared-out/deliverables/proposals/{task-id}-deliverable-r{N}.md`.
+5. Ask Sentinel for final verification; notify Steward that human commercial approval remains required.

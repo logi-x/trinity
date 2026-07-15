@@ -1,0 +1,25 @@
+title: "Steward - Delivery Control"
+description: "Task lifecycle, blockers, handoffs, and approvals"
+refresh: 30
+
+sections:
+  - title: "Delivery"
+    layout: grid
+    columns: 3
+    widgets:
+      - type: metric
+        label: "Active"
+        value: 0
+      - type: metric
+        label: "Blocked"
+        value: 0
+      - type: status
+        label: "Status"
+        value: "Idle"
+        color: gray
+  - title: ""
+    layout: list
+    widgets:
+      - type: markdown
+        content: |
+          Steward is the authoritative ledger for task IDs, owners, gates, blockers, approvals, and closeout.

@@ -1,6 +1,4 @@
-# Canonical source: github:logi-x/logix-atlas (checkout: /home/logix/logix-agents/logix-atlas)
-# This local: mirror is for bootstrap / template bind only — edit the GitHub repo.
-name: atlas
+name: logix-atlas
 display_name: Atlas - General Assistant
 description: |
   Logix general-purpose assistant - handles ad-hoc research, task execution,

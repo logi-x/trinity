@@ -1,16 +1,13 @@
 ---
-description: Create a one-page executive summary
-argument-hint: "[source-file or topic]"
-allowed-tools: Read, Write, Glob, Bash, mcp__trinity__*
+description: Create a provenance-preserving executive summary
+argument-hint: "[task-id] [source-file]"
+allowed-tools: Read, Write, Glob, Bash(mkdir:*), mcp__trinity__*
 ---
 
 # Summary
 
-Executive summary of: **$ARGUMENTS**
-
-## Steps
-
-1. If a path is given, read it; else gather Scout + Sage artifacts for the topic.
-2. Max ~1 page: situation, recommendation, next steps.
-3. Save to `/home/developer/shared-out/deliverables/summaries/{YYYY-MM-DD}-{slug}-summary.md`.
-4. Reply with path.
+1. Verify the source artifact identity and state.
+2. Compress it without adding facts, changing numbers, or dropping material qualifications.
+3. Preserve claim IDs and citations.
+4. Save to `/home/developer/shared-out/deliverables/summaries/{task-id}-deliverable-r{N}.md`.
+5. Ask Sentinel to verify fidelity and notify Steward.

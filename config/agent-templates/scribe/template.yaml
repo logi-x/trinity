@@ -1,5 +1,3 @@
-# Canonical source: github:logi-x/logix-scribe (checkout: /home/logix/logix-agents/logix-scribe)
-# This local: mirror is for bootstrap / template bind only — edit the GitHub repo.
 name: scribe
 display_name: Scribe - Content Writer
 description: |

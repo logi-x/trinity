@@ -1,0 +1,25 @@
+title: "Sentinel - Evidence Gate"
+description: "Independent verification of research and deliverables"
+refresh: 30
+
+sections:
+  - title: "Verification"
+    layout: grid
+    columns: 3
+    widgets:
+      - type: metric
+        label: "Verified"
+        value: 0
+      - type: metric
+        label: "Rejected"
+        value: 0
+      - type: status
+        label: "Status"
+        value: "Idle"
+        color: gray
+  - title: ""
+    layout: list
+    widgets:
+      - type: markdown
+        content: |
+          Sentinel verifies evidence before strategy and verifies fidelity before client delivery. It never approves or edits source artifacts.

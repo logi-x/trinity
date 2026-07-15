@@ -1,14 +1,11 @@
 ---
-description: Report recent content production and blocked inputs
-allowed-tools: Read, Glob, Bash
+description: Report deliverables and their verification states
+allowed-tools: Read, Glob, mcp__trinity__*
 ---
 
 # Status
 
-Report on Scribe content production.
-
-## Steps
-
-1. List `/home/developer/shared-out/deliverables/` (reports, proposals, summaries, presentations).
-2. Note missing Scout/Sage inputs under `shared-in/` that would unblock work.
-3. Output: file counts, last write dates, latest titles, blockers.
+1. List recent artifacts under `/home/developer/shared-out/deliverables/`.
+2. Report task ID, revision, status, Sentinel result, and blocked input for each active item.
+3. Reconcile discrepancies with Steward.
+4. Keep the response short and do not call a draft client-ready.
