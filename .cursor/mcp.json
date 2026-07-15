@@ -4,7 +4,7 @@
             "type": "http",
             "url": "http://localhost:8080/mcp",
             "headers": {
-                "Authorization": "Bearer trinity_mcp_6gQwa4OuhOsWbJZJZLV8XstpI5Wi7b2f7ayBW583Evk"
+                "Authorization": "Bearer ${TRINITY_MCP_TOKEN}"
             }
         }
     }
