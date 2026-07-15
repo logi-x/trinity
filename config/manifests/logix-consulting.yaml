@@ -3,6 +3,8 @@
 # Day-to-day: onboard agents from github.com/logi-x/logix-* under /home/logix/logix-agents.
 #
 # Templates use GitHub so recreate does not depend on config/agent-templates/*.
+# GitHub refs are source templates only. After deployment, initialize each agent
+# with its own trinity/<agent>/<instance> working branch; do not run on main.
 # Post-deploy (manifest full-mesh is only among agents listed below):
 #   POST /api/agents/{each}/permissions/cornelius
 
@@ -73,6 +75,15 @@ agents:
       memory: 2g
       cpu: "1"
 
+  experts:
+    template: github:logi-x/experts
+    folders:
+      expose: true
+      consume: true
+    resources:
+      memory: 8g
+      cpu: "4"
+
 permissions:
   preset: full-mesh
 
@@ -89,6 +100,7 @@ trinity_prompt: |
   - Sentinel (logix-sentinel): Evidence and final-deliverable verifier
   - Steward (logix-steward): Task ledger, lifecycle, blockers, and approvals
   - Forge (logix-forge): Product and solution concept architect
+  - Experts (logix-experts): On-demand specialist packs for payments, Saudi compliance, Arabic/RTL, SEO, operations, security, monetization, and accessibility
   - Cornelius (cornelius): Second brain / institutional memory (when present)
 
   Collaborate effectively:
