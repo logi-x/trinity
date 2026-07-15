@@ -1,0 +1,63 @@
+# Live bug tracker over Raw/bugs/ (one note per bug). Grouped by status.
+# Embed via ![[Bugs.base]]. Source of truth = each bug note's frontmatter.
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.inFolder("Raw/bugs")'
+    - 'status != ""'
+
+formulas:
+  updated_ago: '(now() - file.mtime).days.round(0).toString() + "d ago"'
+
+properties:
+  file.name:
+    displayName: "Bug"
+  status:
+    displayName: "Status"
+  tags:
+    displayName: "Tags"
+  date:
+    displayName: "Filed"
+  linear:
+    displayName: "Linear"
+  formula.updated_ago:
+    displayName: "Updated"
+
+views:
+  - type: table
+    name: "Open"
+    filters:
+      and:
+        - 'status != "resolved"'
+        - 'status != "canceled"'
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - tags
+      - date
+      - formula.updated_ago
+      - linear
+    summaries:
+      file.name: Filled
+
+  - type: table
+    name: "All by status"
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - status
+      - date
+      - linear
+
+  - type: cards
+    name: "Resolved"
+    filters:
+      and:
+        - 'status == "resolved"'
+    order:
+      - file.name
+      - date

@@ -1,10 +1,22 @@
+# Canonical source: github:logi-x/logix-sage (checkout: /home/logix/logix-agents/logix-sage)
+# This local: mirror is for bootstrap / template bind only — edit the GitHub repo.
 name: sage
 display_name: Sage - Strategic Advisor
-description: Strategic advisor that synthesizes research and provides actionable recommendations
+description: |
+  Logix strategic advisor - synthesizes Scout research and Cornelius knowledge
+  into actionable recommendations and executive briefings.
 type: strategy-agent
 priority: 20
+author: Logix
+version: "1.1.0"
+updated: "2026-07-15"
+tagline: Strategy synthesis for Logix leadership and clients
 
-avatar_prompt: A wise elder advisor in a tailored charcoal suit, silver-haired with knowing eyes, seated in a mahogany-paneled study surrounded by strategic frameworks and books, warm authoritative presence
+avatar_prompt: A composed strategist in a modern study with glass and wood, calm authoritative presence, soft side lighting - contemporary professional not costume elder
+
+resources:
+  cpu: "1"
+  memory: "2g"
 
 capabilities:
   - strategic-analysis
@@ -12,6 +24,15 @@ capabilities:
   - recommendation-engine
   - framework-application
   - decision-support
+  - agent-collaboration
+  - verified-input-synthesis
+  - artifact-contract
+
+use_cases:
+  - "Turn Scout research into go/no-go options"
+  - "Brief Logix or client stakeholders"
+  - "Request targeted research from Scout"
+  - "Ground advice in Cornelius vault facts"
 
 commands:
   - name: analyze
@@ -30,20 +51,27 @@ commands:
     description: Ask Scout to research a specific topic
     usage: /request-research [topic]
 
-folders:
+shared_folders:
   expose: true
   consume: true
+
+# Trinity MCP is platform-injected at runtime (see inject_trinity_mcp_if_configured).
+mcp_servers: []
 
 metrics:
   - name: strategies_developed
     type: counter
+    label: "Strategies"
     description: Number of strategies developed
   - name: recommendations_made
     type: counter
+    label: "Recommendations"
     description: Recommendations provided
   - name: briefings_generated
     type: counter
+    label: "Briefings"
     description: Executive briefings created
   - name: analysis_status
     type: status
+    label: "Status"
     description: Current analysis status

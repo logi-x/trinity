@@ -7,7 +7,7 @@ write-flag kill-switch) upstream.
 
 Verbs:
   {"action":"list"}                        -> {"enabled": true, "skills": []}
-  {"action":"capture","body":...,title?}   -> writes a note into Brain/00-Inbox
+  {"action":"capture","body":...,title?}   -> writes a note into Brain/Inbox
   {"action":"link","from":...,"to":...}    -> appends a real [[wikilink]] to the
                                               source note (both must exist)
   {"action":"capture_transcript","events":[...],session_id?,process?}
@@ -21,7 +21,7 @@ Verbs:
                                               persisted scope so new notes/links
                                               appear on the orb (#66/#67)
 
-Writes land INSIDE the vault (Brain/00-Inbox) so they are git-synced with the
+Writes land INSIDE the vault (Brain/Inbox) so they are git-synced with the
 rest of the knowledge base and the exporter sees them natively. run_skill
 (arbitrary exec) is intentionally absent. Contract version 1.
 """
@@ -39,7 +39,7 @@ from _common import (
     run_export,
 )
 
-INBOX = VAULT / "00-Inbox"
+INBOX = VAULT / "Inbox"
 VOICE_DIR = INBOX / "Voice Conversations"
 HOOK_DIR = Path(__file__).resolve().parent
 POSTPROCESS_CONFIG = HOOK_DIR / "voice-postprocess.json"

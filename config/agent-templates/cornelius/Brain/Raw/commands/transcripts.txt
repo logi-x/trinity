@@ -1,0 +1,5 @@
+Read the transcript in /Raw/transcripts/*.vtt
+Extract every decision made, every action item with owner and deadline,
+and a 3-bullet summary. Add actions to /Action-Tracker.md, log decisions 
+to /Decision-Log.md, and create a client note in /clients/ linking back 
+to this transcript.

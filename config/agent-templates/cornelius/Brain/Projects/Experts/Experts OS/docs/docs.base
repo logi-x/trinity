@@ -1,0 +1,45 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.name != "docs"'
+    - 'file.folder.startsWith("Projects/Experts/Experts OS/docs")'
+
+formulas:
+  area: 'file.folder.split("/").slice(4, 5).join("")'
+  updated_ago: '(now() - file.mtime).days.round(0).toString() + "d ago"'
+
+properties:
+  formula.area:
+    displayName: "Area"
+  type:
+    displayName: "Type"
+  formula.updated_ago:
+    displayName: "Updated"
+
+views:
+  - type: table
+    name: "By area"
+    order:
+      - file.name
+      - formula.area
+      - type
+      - formula.updated_ago
+    groupBy:
+      property: formula.area
+      direction: ASC
+
+  - type: table
+    name: "Code reference"
+    filters:
+      and:
+        - 'file.folder.endsWith("/code")'
+    order:
+      - file.name
+      - type
+
+  - type: cards
+    name: "All notes"
+    order:
+      - file.name
+      - formula.area
+      - type

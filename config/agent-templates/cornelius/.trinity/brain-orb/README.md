@@ -34,7 +34,7 @@ Rules every hook obeys:
   narrowing); exporter failures leave the previous `data.json` untouched;
   request bodies never form filesystem paths (the search scope comes from
   `state.json`, transcript paths are realpath-confined to `Brain/`).
-- **Writes land in the vault** (`Brain/00-Inbox/`) so they git-sync with the
+- **Writes land in the vault** (`Brain/Inbox/`) so they git-sync with the
   knowledge base and the exporter sees them natively.
 
 The rendered graph itself is produced by

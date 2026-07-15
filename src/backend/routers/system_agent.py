@@ -1,7 +1,7 @@
 """
 System Agent routes for the Trinity backend.
 
-Provides endpoints for managing the Trinity system agent:
+Provides endpoints for managing the Logix System Agent:
 - Status check
 - Re-initialization (reset to clean state)
 - Interactive terminal via WebSocket (PTY forwarding)

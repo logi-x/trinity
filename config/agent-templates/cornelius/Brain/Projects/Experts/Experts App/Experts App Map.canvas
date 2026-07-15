@@ -1,0 +1,283 @@
+{
+  "nodes": [
+    {
+      "id": "a1000000000000e1",
+      "type": "group",
+      "x": -1560,
+      "y": -240,
+      "width": 400,
+      "height": 560,
+      "label": "Entry",
+      "color": "5"
+    },
+    {
+      "id": "f1010000000000e1",
+      "type": "file",
+      "x": -1540,
+      "y": -200,
+      "width": 360,
+      "height": 220,
+      "file": "Projects/Experts/Experts App/intro.md",
+      "color": "5"
+    },
+    {
+      "id": "f1020000000000e1",
+      "type": "file",
+      "x": -1540,
+      "y": 60,
+      "width": 360,
+      "height": 220,
+      "file": "Projects/Experts/Experts App/project.md",
+      "color": "5"
+    },
+    {
+      "id": "a2000000000000e1",
+      "type": "group",
+      "x": -1060,
+      "y": -360,
+      "width": 420,
+      "height": 820,
+      "label": "Working surfaces (vault hubs)",
+      "color": "3"
+    },
+    {
+      "id": "f2010000000000e1",
+      "type": "file",
+      "x": -1040,
+      "y": -320,
+      "width": 380,
+      "height": 200,
+      "file": "Projects/Experts/Experts App/Bugs & Ops.md",
+      "color": "3"
+    },
+    {
+      "id": "f2020000000000e1",
+      "type": "file",
+      "x": -1040,
+      "y": -80,
+      "width": 380,
+      "height": 200,
+      "file": "Projects/Experts/Experts App/Plans & Sessions.md",
+      "color": "3"
+    },
+    {
+      "id": "f2030000000000e1",
+      "type": "file",
+      "x": -1040,
+      "y": 160,
+      "width": 380,
+      "height": 200,
+      "file": "Projects/Experts/Experts App/docs.md",
+      "color": "3"
+    },
+    {
+      "id": "a3000000000000e1",
+      "type": "group",
+      "x": -540,
+      "y": -380,
+      "width": 440,
+      "height": 900,
+      "label": "Architecture",
+      "color": "4"
+    },
+    {
+      "id": "t3010000000000e1",
+      "type": "text",
+      "x": -520,
+      "y": -340,
+      "width": 400,
+      "height": 250,
+      "color": "4",
+      "text": "## Topology\n\n**Monorepo** (pnpm, Node ≥ 22), app-first.\n\n- **experts-app** — Next.js 16 full-stack (App Router, API routes)\n- **experts-realtime** — WS + Redis pub/sub (:3026)\n- **experts-prisma** — migrate helpers\n- **docker/** — staging/canary/prod only"
+    },
+    {
+      "id": "t3020000000000e1",
+      "type": "text",
+      "x": -520,
+      "y": -70,
+      "width": 400,
+      "height": 300,
+      "color": "4",
+      "text": "## Stack\n\n- **UI** React 19 · Tailwind v4 · HeroUI v3 (shadcn/Radix fallback)\n- **Data** PostgreSQL · Prisma 7 (`@prisma/adapter-pg`)\n- **Auth** NextAuth v5 — credentials + OAuth\n- **i18n** next-intl — `en` / `ar` (RTL) / `es`\n- **Fetch** SWR via `useApiQuery`\n- **Jobs** Redis + BullMQ (`src/workers/`)\n- **Tests** Vitest + Playwright (node-env)"
+    },
+    {
+      "id": "t3030000000000e1",
+      "type": "text",
+      "x": -520,
+      "y": 250,
+      "width": 400,
+      "height": 230,
+      "color": "4",
+      "text": "## CQRS-style domains\n\n`src/lib/{domain}/` → **commands · handlers · queries · dto · mappers**.\n\nAPI routes under `app/api/v1/{domain}/` delegate to handlers and return **camelCase DTOs**. Zod validates at the boundary."
+    },
+    {
+      "id": "a4000000000000e1",
+      "type": "group",
+      "x": 0,
+      "y": -460,
+      "width": 900,
+      "height": 1080,
+      "label": "Domains & flows",
+      "color": "6"
+    },
+    {
+      "id": "t4010000000000e1",
+      "type": "text",
+      "x": 20,
+      "y": -420,
+      "width": 400,
+      "height": 200,
+      "color": "6",
+      "text": "### Courses\n\nDiscovery · curriculum (modules/lessons/quizzes/exams/assets) · enrollment · certifications. Publish lifecycle + structural-edit guards."
+    },
+    {
+      "id": "t4020000000000e1",
+      "type": "text",
+      "x": 460,
+      "y": -420,
+      "width": 400,
+      "height": 200,
+      "color": "6",
+      "text": "### Events\n\nMulti-day events · ticket offers (full-pass + per-day) · occurrence-level capacity & pricing · registration + settlement/refunds."
+    },
+    {
+      "id": "t4030000000000e1",
+      "type": "text",
+      "x": 20,
+      "y": -190,
+      "width": 400,
+      "height": 200,
+      "color": "4",
+      "text": "### Payments & Billing\n\nSAR settlement · ZATCA invoicing · PSPs (Stripe/Noon/Tabby) · internal ledger · refunds · instructor payouts · processing-fee model.\n\n→ [[Projects/Experts/Experts App/Payments Flow.canvas|Money-flow zoom]]"
+    },
+    {
+      "id": "t4040000000000e1",
+      "type": "text",
+      "x": 460,
+      "y": -190,
+      "width": 400,
+      "height": 200,
+      "color": "6",
+      "text": "### Community\n\nPosts · reactions/likes (perf-sensitive) · visibility (public/private/unlisted) · moderation · access grants."
+    },
+    {
+      "id": "t4050000000000e1",
+      "type": "text",
+      "x": 20,
+      "y": 40,
+      "width": 400,
+      "height": 200,
+      "color": "1",
+      "text": "### Admin\n\nOrbit console · moderation takedown (`adminLockedAt`) · approval workflow · platform metrics catalog · `requireAdmin()` on `/api/v1/admin/**`."
+    },
+    {
+      "id": "t4060000000000e1",
+      "type": "text",
+      "x": 460,
+      "y": 40,
+      "width": 400,
+      "height": 200,
+      "color": "6",
+      "text": "### Creator\n\nCourse/event authoring · pricing fields · publish dialogs · cooldown notices · net-revenue dashboards."
+    },
+    {
+      "id": "t4070000000000e1",
+      "type": "text",
+      "x": 20,
+      "y": 270,
+      "width": 400,
+      "height": 200,
+      "color": "6",
+      "text": "### AI / Ask AI\n\nEmbeddings + RAG (pgvector) · AI worker container (no Prisma) · Ask-AI per-role · AI Suggest · recommendations."
+    },
+    {
+      "id": "t4080000000000e1",
+      "type": "text",
+      "x": 460,
+      "y": 270,
+      "width": 400,
+      "height": 200,
+      "color": "5",
+      "text": "### Auth & Identity\n\nNextAuth v5 (`src/lib/auth.ts`) · users vs **profiles** (name lives on profiles) · client-IP + sliding-window rate limits · org management."
+    },
+    {
+      "id": "t4090000000000e1",
+      "type": "text",
+      "x": 240,
+      "y": 500,
+      "width": 400,
+      "height": 90,
+      "color": "2",
+      "text": "**Realtime** — presence, subscriptions, JWT from app token contract (`experts-realtime`)."
+    }
+  ],
+  "edges": [
+    {
+      "id": "e0010000000000e1",
+      "fromNode": "f1010000000000e1",
+      "fromSide": "bottom",
+      "toNode": "f1020000000000e1",
+      "toSide": "top",
+      "label": "context for"
+    },
+    {
+      "id": "e0020000000000e1",
+      "fromNode": "f1020000000000e1",
+      "fromSide": "right",
+      "toNode": "f2010000000000e1",
+      "toSide": "left",
+      "color": "3",
+      "label": "surfaces"
+    },
+    {
+      "id": "e0030000000000e1",
+      "fromNode": "f1020000000000e1",
+      "fromSide": "right",
+      "toNode": "f2020000000000e1",
+      "toSide": "left",
+      "color": "3"
+    },
+    {
+      "id": "e0040000000000e1",
+      "fromNode": "f1020000000000e1",
+      "fromSide": "right",
+      "toNode": "f2030000000000e1",
+      "toSide": "left",
+      "color": "3"
+    },
+    {
+      "id": "e0050000000000e1",
+      "fromNode": "f1020000000000e1",
+      "fromSide": "right",
+      "toNode": "t3010000000000e1",
+      "toSide": "left",
+      "color": "4",
+      "label": "built on"
+    },
+    {
+      "id": "e0060000000000e1",
+      "fromNode": "t3010000000000e1",
+      "fromSide": "bottom",
+      "toNode": "t3020000000000e1",
+      "toSide": "top",
+      "color": "4"
+    },
+    {
+      "id": "e0070000000000e1",
+      "fromNode": "t3020000000000e1",
+      "fromSide": "bottom",
+      "toNode": "t3030000000000e1",
+      "toSide": "top",
+      "color": "4"
+    },
+    {
+      "id": "e0080000000000e1",
+      "fromNode": "t3030000000000e1",
+      "fromSide": "right",
+      "toNode": "a4000000000000e1",
+      "toSide": "left",
+      "color": "6",
+      "label": "implements"
+    }
+  ]
+}

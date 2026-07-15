@@ -20,7 +20,7 @@ import fs from 'fs'
  * TEST_AGENT must exist; the suite skips cleanly otherwise.
  */
 
-const TEST_AGENT = process.env.TEST_AGENT || 'trinity-system'
+const TEST_AGENT = process.env.TEST_AGENT || 'logix-system'
 const SLATE = '#94a3b8' // getBarColor() cancelled color
 const RED = '#ef4444' // getBarColor() error color
 

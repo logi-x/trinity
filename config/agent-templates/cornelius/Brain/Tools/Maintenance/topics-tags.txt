@@ -1,0 +1,139 @@
+please create a script that curates conversations wikilinks and tags, as it's not accurate now
+
+things to consider:
+
+don't tag or link when, and remove if exists:
+- tagged "logix" or - [[Entities/Projects/Logix]] because the document contained a path to a project located in /home/logix
+- tagged "community" or - [[Wiki/Concepts/Community]] because the document contained a path to a project located in /home/logix/experts/apps/.../community, is a false path-only tags/links, and should be removed.
+- tagged "topic/skills" or "skills" or - [[Wiki/Concepts/Skills]] just because a tool called a skill
+- tagged "topic/gsd" or "gsd" or - [[Wiki/Concepts/GSD]] just because a tool called a skill
+- not tagged correctly e.g. "heroui", without "tech/heroui" prefix, example:
+tags:
+  [
+    "codex",
+    "conversation",
+    "topic/access-control",
+    "topic/affiliates",
+    "topic/agents-md",
+    "codex-cli",
+    "eslint",
+    "project/experts",
+    "project/experts-app",
+    "topic/gsd",
+    "heroui",
+    "topic/i18n",
+    "topic/next-intl",
+    "next-js",
+    "openai",
+    "prettier",
+    "prisma",
+    "react",
+    "shadcn-ui",
+    "vercel",
+    "vitest",
+    "zod",
+  ]
+- no links to projects from conversations at all, since LLMs will reference by tag only.
+- no links to people either
+- we need to look for e.g. - [[Entities/Projects/Experts]] or - [[Entities/Projects/Experts|Experts]]
+
+Lastly, let's enhance topics and stick to
+
+Topics & Tech tags:
+Android
+SwiftUI
+Swift
+Claude Code
+Claude
+Cloudflare Turnstile
+Codex CLI
+Codex
+Cursor
+Cursor Rules
+Docker
+ESLint
+GitHub
+GitHub Actions
+HeroUI
+Next.js
+NextAuth
+Nginx
+Noon
+OAuth
+OpenAI
+Playwright
+PostgreSQL
+Prisma
+Ralph
+SSH
+Slack
+Supabase
+Tailwind CSS
+Vercel
+Vitest
+Zod
+AGENTS
+APIs
+Access Control
+Affiliate System
+Analytics
+Auth
+CSS
+Certbot
+Community
+Composer
+Documentation
+Domains
+Email (SMTP)
+Followers
+Forex
+GraphQL
+Graphify
+Inertia.js
+Instructor Certification
+JavaScript
+Laravel Reverb
+Laravel Sanctum
+Laravel
+Marketing
+Material UI
+Monorepo
+Navigation
+Nginx
+Node.js
+Noon Payments
+PDF
+PRD
+Pandas
+Payments
+Prettier
+Processing Fees
+Python
+QR Codes
+React
+Redis
+Redux
+Risk Management
+SEO
+SSL-TLS
+SSR
+MCP
+Skills
+Storage
+Stripe
+TLV
+Technical Analysis
+Testing
+Turborepo
+TypeScript
+WSL
+WebSockets
+Webhooks
+Windows
+Yarn
+ZATCA
+i18n
+next-intl
+pnpm
+reCAPTCHA
+shadcn-ui

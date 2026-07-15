@@ -3,7 +3,7 @@ display_name: DD Tech Agent
 description: Technology assessment, scalability evaluation, and IP analysis
 tagline: Under the hood
 version: "1.0.0"
-author: Trinity VC Demo
+author: Logix
 
 resources:
   cpu: "2"

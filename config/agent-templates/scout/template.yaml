@@ -1,10 +1,22 @@
+# Canonical source: github:logi-x/logix-scout (checkout: /home/logix/logix-agents/logix-scout)
+# This local: mirror is for bootstrap / template bind only — edit the GitHub repo.
 name: scout
 display_name: Scout - Market Research Analyst
-description: Market research specialist that discovers trends, analyzes competitors, and identifies opportunities
+description: |
+  Logix market research specialist - discovers trends, analyzes competitors,
+  and identifies opportunities for product and client engagements (Experts, HoWA, GCC).
 type: research-agent
 priority: 20
+author: Logix
+version: "1.1.0"
+updated: "2026-07-15"
+tagline: Market intelligence for Logix product and client work
 
-avatar_prompt: A sharp-eyed explorer with binoculars and a weathered field journal, wearing a safari vest over a crisp shirt, confident and alert expression, warm golden-hour lighting
+avatar_prompt: A sharp-eyed field researcher with a compact notebook, modern smart-casual attire, focused expression, soft daylight - professional not safari costume
+
+resources:
+  cpu: "1"
+  memory: "2g"
 
 capabilities:
   - web-search
@@ -12,6 +24,15 @@ capabilities:
   - competitor-analysis
   - trend-detection
   - report-generation
+  - agent-collaboration
+  - evidence-ledger
+  - artifact-contract
+
+use_cases:
+  - "Research GCC/edtech/SaaS markets for Logix engagements"
+  - "Profile competitors for Experts or related products"
+  - "Surface opportunities for Sage/Scribe pipelines"
+  - "Feed Cornelius with structured research notes when asked"
 
 commands:
   - name: research
@@ -30,20 +51,27 @@ commands:
     description: Check recent research activity
     usage: /status
 
-folders:
+shared_folders:
   expose: true
   consume: false
+
+# Trinity MCP is platform-injected at runtime (see inject_trinity_mcp_if_configured).
+mcp_servers: []
 
 metrics:
   - name: research_reports
     type: counter
+    label: "Reports"
     description: Number of research reports generated
   - name: markets_analyzed
     type: counter
+    label: "Markets"
     description: Number of markets analyzed
   - name: opportunities_found
     type: counter
+    label: "Opportunities"
     description: Opportunities identified
   - name: research_status
     type: status
+    label: "Status"
     description: Current research status

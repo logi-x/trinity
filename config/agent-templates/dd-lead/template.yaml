@@ -3,7 +3,7 @@ display_name: DD Deal Lead Agent
 description: Synthesize all due diligence findings, calculate risk score, and make investment recommendation
 tagline: The verdict
 version: "1.0.0"
-author: Trinity VC Demo
+author: Logix
 
 resources:
   cpu: "4"

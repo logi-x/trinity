@@ -606,7 +606,7 @@ function maybeAutoOpenOnboarding() {
     return
   }
   if (isFleetLoading.value) return
-  // Count only user-created agents — `trinity-system` exists on every install,
+  // Count only user-created agents — `logix-system` exists on every install,
   // so counting it would mean a fresh fleet is never "empty" and auto-open
   // would never fire.
   if (agents.value.filter(a => !a.is_system).length > 0) return

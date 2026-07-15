@@ -7,7 +7,7 @@ steps:
   - id: client-research
     name: Research Client & Industry
     type: agent_task
-    agent: acme-scout
+    agent: logix-scout
     message: |
       Research the following new client prospect:
 
@@ -29,7 +29,7 @@ steps:
     name: Develop Strategic Approach
     type: agent_task
     depends_on: client-research
-    agent: acme-sage
+    agent: logix-sage
     message: |
       Based on Scout's research on {{input.company_name}}, develop a strategic approach:
 
@@ -57,7 +57,7 @@ steps:
     name: Draft Client Proposal
     type: agent_task
     depends_on: strategy-approval
-    agent: acme-scribe
+    agent: logix-scribe
     message: |
       Create a professional proposal for {{input.company_name}}:
 

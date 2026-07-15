@@ -22,7 +22,7 @@
             </svg>
           </div>
           <div>
-            <div class="text-base font-semibold text-gray-800 dark:text-gray-100">Trinity System Agent</div>
+            <div class="text-base font-semibold text-gray-800 dark:text-gray-100">Logix System Agent</div>
             <div class="text-xs text-accent-purple-500 dark:text-accent-purple-400">Platform Orchestrator</div>
           </div>
         </div>

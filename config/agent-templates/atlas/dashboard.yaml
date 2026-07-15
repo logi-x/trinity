@@ -1,0 +1,25 @@
+title: "Atlas - General Assistant"
+description: "Ad-hoc task and orchestration activity for Logix"
+refresh: 30
+
+sections:
+  - title: "Activity"
+    layout: grid
+    columns: 2
+    widgets:
+      - type: metric
+        label: "Tasks"
+        value: 0
+        description: "Ad-hoc tasks handled"
+
+      - type: status
+        label: "Status"
+        value: "Idle"
+        color: gray
+
+  - title: ""
+    layout: list
+    widgets:
+      - type: markdown
+        content: |
+          No fixed domain - handles whatever doesn't belong to **logix-scout** / **logix-sage** / **logix-scribe**. Query **cornelius** for org/client context.

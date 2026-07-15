@@ -169,7 +169,7 @@ curl http://localhost:8000/api/ops/fleet/status \
 {
   "agents": [
     {
-      "name": "trinity-system",
+      "name": "logix-system",
       "status": "running",
       "is_system": true,
       "context_percent": 0,
@@ -472,7 +472,7 @@ curl -X DELETE http://localhost:8000/api/agents/trinity-system \
 # Expected: 403
 
 # MCP (if testing via Claude Code)
-# mcp__trinity__delete_agent(name="trinity-system")
+# mcp__trinity__delete_agent(name="logix-system")
 # Expected: Error about system agents
 ```
 

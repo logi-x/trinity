@@ -1,0 +1,2 @@
+# select from billing.order_settlements where id = '9e01f910-b34d-4728-b7ca-9bff1ae0b33a'
+docker exec -e PGPASSWORD=experts experts-dev-postgres psql -U experts -d experts -X -v ON_ERROR_STOP=1 -P pager=off -c "SELECT * FROM billing.order_settlements WHERE id = '9e01f910-b34d-4728-b7ca-9bff1ae0b33a';"

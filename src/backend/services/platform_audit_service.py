@@ -163,7 +163,7 @@ class PlatformAuditService:
         """Determine (actor_type, actor_id, actor_email) from inputs.
 
         Precedence: user > agent > mcp_scope=='system' > mcp_client.
-        Returns ('system', 'trinity-system', None) for system events with no
+        Returns ('system', 'logix-system', None) for system events with no
         identifiable actor — never returns all-None so the NOT NULL
         actor_type column is satisfied.
         """
@@ -176,10 +176,10 @@ class PlatformAuditService:
         if actor_agent_name:
             return (AuditActorType.AGENT.value, actor_agent_name, None)
         if mcp_scope == "system":
-            return (AuditActorType.SYSTEM.value, "trinity-system", None)
+            return (AuditActorType.SYSTEM.value, "logix-system", None)
         if mcp_key_id:
             return (AuditActorType.MCP_CLIENT.value, mcp_key_id, None)
-        return (AuditActorType.SYSTEM.value, "trinity-system", None)
+        return (AuditActorType.SYSTEM.value, "logix-system", None)
 
     def enable_hash_chain(self, enabled: bool = True) -> None:
         """Toggle hash chain computation for new entries (Phase 4)."""

@@ -1,0 +1,65 @@
+name: Agent Push Guard
+
+# EXP-158: github.com substitute for a pre-receive hook. Runs on push,
+# validates that commits authored by agent service accounts only touch
+# Raw/agent-state/<name>.md paths. On violation: force-revert, Slack
+# alert. Full deploy notes in Raw/guides/2026-05-28-brain-agent-push-
+# guard-deploy.md.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 50
+          token: ${{ secrets.GH_REVERT_TOKEN || github.token }}
+
+      - name: Validate pushed commits
+        id: validate
+        env:
+          PUSHER: ${{ github.event.pusher.name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: bash .github/scripts/validate-agent-push.sh
+
+      - name: Auto-revert violation
+        if: steps.validate.outputs.violation == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_REVERT_TOKEN || github.token }}
+        run: |
+          git config user.email "bot@experts.logi-x"
+          git config user.name  "brain-agent-push-guard"
+          git revert --no-edit ${{ steps.validate.outputs.bad_commits }}
+          git push origin main
+
+      - name: Slack alert
+        if: steps.validate.outputs.violation == 'true'
+        env:
+          SLACK_WEBHOOK_BUG_BOTS: ${{ secrets.SLACK_WEBHOOK_BUG_BOTS }}
+          DETAIL: ${{ steps.validate.outputs.detail }}
+        run: |
+          if [ -z "${SLACK_WEBHOOK_BUG_BOTS:-}" ]; then
+            echo "::warning::SLACK_WEBHOOK_BUG_BOTS not configured — Slack alert skipped"
+            exit 0
+          fi
+          jq -n --arg t ":rotating_light: *brain agent-push guard tripped*" \
+                --arg d "${DETAIL}" \
+                '{text:$t, blocks:[
+                  {type:"section", text:{type:"mrkdwn", text:$t}},
+                  {type:"section", text:{type:"mrkdwn", text:("```\n" + $d + "\n```")}}
+                ]}' \
+          | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_BUG_BOTS"
+
+      - name: Pass
+        if: steps.validate.outputs.violation != 'true'
+        run: echo "All pushed commits within agent path allowlist."

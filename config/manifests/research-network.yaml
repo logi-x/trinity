@@ -1,7 +1,7 @@
-# Research Network - Autonomous Demo System
+# Logix Research Network
 # Deploy with: POST /api/systems/deploy
 #
-# This manifest deploys a two-agent research network:
+# Two-agent research network for Logix:
 # - Researcher: Gathers trends on schedule (every 4 hours)
 # - Analyst: Synthesizes findings, answers questions (daily briefing)
 #
@@ -12,18 +12,19 @@
 #     --data-binary @config/manifests/research-network.yaml
 
 name: research-network
-description: Two-agent autonomous research and analysis system
+description: Logix two-agent autonomous research and analysis system
 
 # System-wide instructions (injected into all agents)
 prompt: |
-  You are part of the Research Network - an autonomous system for discovering
-  and analyzing opportunities. Work collaboratively with other agents.
+  You are part of the Logix Research Network - an autonomous system for discovering
+  and analyzing opportunities relevant to Logix (Experts, HoWA, GCC SaaS, AI agents).
 
   Key principles:
   - Be thorough but concise in reports
   - Always cite sources
   - Flag high-priority findings clearly
   - Maintain consistent formatting
+  - Prefer Logix-scoped relevance; ask cornelius for institutional facts when permitted
 
 agents:
   researcher:
@@ -32,11 +33,11 @@ agents:
       cpu: "1"
       memory: "2g"
     folders:
-      expose: true    # Shares /shared-out with analyst
+      expose: true
       consume: false
     schedules:
       - name: research-cycle
-        cron: "0 */4 * * *"  # Every 4 hours
+        cron: "0 */4 * * *"
         message: "/research"
         timezone: UTC
 
@@ -47,13 +48,12 @@ agents:
       memory: "2g"
     folders:
       expose: false
-      consume: true   # Mounts researcher's shared folder
+      consume: true
     schedules:
       - name: daily-briefing
-        cron: "0 9 * * *"  # Daily at 9 AM UTC
+        cron: "0 9 * * *"
         message: "/briefing"
         timezone: UTC
 
-# Permission configuration
 permissions:
-  preset: full-mesh  # Both agents can call each other
+  preset: full-mesh

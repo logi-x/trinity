@@ -1,0 +1,23 @@
+node_modules
+.git
+graphify-out
+.prettierignore
+.prettierrc
+.eslintrc
+.eslintignore
+.eslintrc.js
+.eslintrc.js.map
+.eslintrc.js.map
+.obsidian
+
+# they cause conflicts with the obsidian app
+.obsidian/workspace.json
+.obsidian/graph.json
+.gitnexus
+**/.DS_Store
+**/*/.DS_Store
+.DS_Store
+
+Conversations
+.venv
+.codegraph

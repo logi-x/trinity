@@ -4,7 +4,7 @@ hidden: true
 display_name: Test Echo
 description: Simple echo agent for testing basic chat functionality
 version: "1.0.0"
-author: Trinity Platform
+author: Logix Platform
 
 resources:
   cpu: "1"

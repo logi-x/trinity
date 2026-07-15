@@ -3,7 +3,7 @@ display_name: DD Legal Agent
 description: Corporate structure review, IP ownership verification, and contract analysis
 tagline: Dotting i's and crossing t's
 version: "1.0.0"
-author: Trinity VC Demo
+author: Logix
 
 resources:
   cpu: "2"

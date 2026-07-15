@@ -1,0 +1,107 @@
+formulas:
+  days_overdue: 'if(due, (today() - date(due)).days, "")'
+  review_overdue: 'if(review_by, (today() - date(review_by)).days, "")'
+  updated_ago: '(now() - file.mtime).days.round(0).toString() + "d ago"'
+
+properties:
+  formula.days_overdue:
+    displayName: "Days overdue"
+  formula.review_overdue:
+    displayName: "Review overdue (d)"
+  formula.updated_ago:
+    displayName: "Updated"
+  severity:
+    displayName: "Severity"
+  status:
+    displayName: "Status"
+  category:
+    displayName: "Category"
+
+views:
+  - type: table
+    name: "⚠ Overdue actions"
+    filters:
+      and:
+        - file.hasTag("action")
+        - 'status.lower() != "closed"'
+        - 'due != ""'
+        - 'date(due) < today()'
+    order:
+      - file.name
+      - due
+      - formula.days_overdue
+      - priority
+      - owner
+    groupBy:
+      property: priority
+      direction: ASC
+
+  - type: table
+    name: "🔴 Open high/critical bugs"
+    filters:
+      and:
+        - file.hasTag("bug")
+        - 'severity.lower().containsAny("urgent", "critical", "high")'
+        - 'status.lower().containsAny("open", "todo", "backlog", "progress", "review") == true'
+    order:
+      - file.name
+      - severity
+      - status
+      - date
+    groupBy:
+      property: severity
+      direction: ASC
+
+  - type: table
+    name: "🗳 Decisions due for review"
+    filters:
+      and:
+        - file.hasTag("decision")
+        - 'review_by != ""'
+        - 'date(review_by) <= today()'
+    order:
+      - file.name
+      - review_by
+      - formula.review_overdue
+      - stakeholders
+
+  - type: table
+    name: "🐞 All open bugs by severity"
+    filters:
+      and:
+        - file.hasTag("bug")
+        - 'status.lower().containsAny("open", "todo", "backlog", "progress", "review") == true'
+    order:
+      - file.name
+      - severity
+      - status
+    groupBy:
+      property: severity
+      direction: ASC
+
+  - type: table
+    name: "📚 All Experts notes (by category)"
+    filters:
+      and:
+        - file.hasTag("experts")
+        - 'file.ext == "md"'
+    order:
+      - file.name
+      - category
+      - date
+      - formula.updated_ago
+    groupBy:
+      property: category
+      direction: ASC
+
+  - type: table
+    name: "🕑 Recently touched"
+    filters:
+      and:
+        - file.hasTag("experts")
+        - 'file.ext == "md"'
+    limit: 60
+    order:
+      - file.name
+      - category
+      - formula.updated_ago

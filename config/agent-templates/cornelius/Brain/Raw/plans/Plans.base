@@ -1,0 +1,33 @@
+filters:
+  and:
+    - file.hasTag("plan")
+    - 'file.ext == "md"'
+    - 'file.name != "Plans"'
+
+formulas:
+  updated_ago: '(now() - file.mtime).days.round(0).toString() + "d ago"'
+
+properties:
+  status:
+    displayName: "Status"
+  formula.updated_ago:
+    displayName: "Updated"
+
+views:
+  - type: table
+    name: "All plans"
+    order:
+      - file.name
+      - status
+      - date
+      - formula.updated_ago
+    groupBy:
+      property: status
+      direction: ASC
+
+  - type: cards
+    name: "Cards"
+    order:
+      - file.name
+      - status
+      - date

@@ -1,0 +1,34 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.name != "Sources"'
+    - 'file.name != "TEMPLATE"'
+    - 'file.folder == "Raw/sources"'
+
+formulas:
+  updated_ago: '(now() - file.mtime).days.round(0).toString() + "d ago"'
+
+properties:
+  category:
+    displayName: "Kind"
+  formula.updated_ago:
+    displayName: "Updated"
+
+views:
+  - type: table
+    name: "By date"
+    order:
+      - file.name
+      - date
+      - category
+      - formula.updated_ago
+
+  - type: table
+    name: "By kind"
+    order:
+      - file.name
+      - category
+      - date
+    groupBy:
+      property: category
+      direction: ASC

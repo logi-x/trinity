@@ -1,30 +1,41 @@
-# Agent template catalog
+# Agent template catalog (Logix)
 
-Ready-made starting points for deploying an agent to Trinity. Each subdirectory is one template — a `CLAUDE.md` (the agent's instructions) plus a `template.yaml` (metadata: `name`, `description`, `type`, `capabilities`, `commands`, `metrics`, `folders`). Pick one as your starting point instead of authoring an agent from scratch.
+Ready-made starting points for deploying an agent on this Trinity instance.
 
-> New here? The repo's agent entry point is [`AGENTS.md`](../../AGENTS.md) → [Deploy an agent](../../AGENTS.md#deploy-an-agent-to-trinity). Full template schema: [`docs/TRINITY_COMPATIBLE_AGENT_GUIDE.md`](../../docs/TRINITY_COMPATIBLE_AGENT_GUIDE.md).
+**Logix consulting agents** (Scout, Sage, Scribe, Atlas) are maintained as GitHub repos under [`logi-x`](https://github.com/logi-x) and checked out at `/home/logix/logix-agents/`. Prefer:
+
+```text
+github:logi-x/logix-scout | logix-sage | logix-scribe | logix-atlas
+```
+
+via `/trinity:onboard` / sync — not hand-editing this catalog. Thin `local:scout|sage|scribe|atlas` copies exist as bootstrap mirrors only; they can lag the repos.
+
+> Agent entry point: [`AGENTS.md`](../../AGENTS.md) → [Deploy an agent](../../AGENTS.md#deploy-an-agent-to-trinity). Full schema: [`docs/TRINITY_COMPATIBLE_AGENT_GUIDE.md`](../../docs/TRINITY_COMPATIBLE_AGENT_GUIDE.md).
 
 ## How to use a template
 
-- **From a checkout** — copy a template directory, edit its `CLAUDE.md` + `template.yaml`, then deploy it: `cd <copy>/ && trinity deploy .` (see [Deploy an agent](../../AGENTS.md#deploy-an-agent-to-trinity)).
+- **Logix consulting agents** — work in `/home/logix/logix-agents/<repo>`, push, `/trinity:sync`.
+- **From a checkout** — copy a template directory, edit, deploy: `cd <copy>/ && trinity deploy .`
 - **From the web UI** — *Create Agent* → pick a template by `name`.
-- **By reference** — these `name`s are the built-in templates the platform ships; they appear in `GET /api/templates` and `list_templates` (MCP). Directories marked `hidden: true` in their `template.yaml` (see [Not starting points](#not-starting-points)) are excluded from that catalog but stay deployable by id (e.g. `local:test-echo`).
+- **Fleet recipe (optional)** — `config/manifests/logix-consulting.yaml` (greenfield/DR only; not a living roster).
 
 ## Starter templates
 
-### Single-purpose
+### Single-purpose (local mirrors)
 
-| `name` | What it does |
-|--------|--------------|
-| `scout` | Market research analyst — discovers trends, analyzes competitors, identifies opportunities |
-| `sage` | Strategic advisor — synthesizes research into actionable recommendations |
-| `scribe` | Content writer — reports, proposals, and client deliverables |
+| `name` | Canonical repo | Role |
+|--------|----------------|------|
+| `scout` | `github:logi-x/logix-scout` | Market research (GCC / product / client briefs) |
+| `sage` | `github:logi-x/logix-sage` | Strategy from Scout (+ Cornelius) |
+| `scribe` | `github:logi-x/logix-scribe` | Client deliverables from Scout + Sage |
+| `atlas` | `github:logi-x/logix-atlas` | General assistant / orchestrator |
+| `cornelius` | `local:cornelius` | Second brain / KB |
 
-`scout` → `sage` → `scribe` are designed to work as a **consulting team**: Scout researches into a shared folder, Sage strategizes over it, Scribe writes the deliverable. Deploy them together to see agent-to-agent collaboration.
+Deployed agent names are typically `logix-scout`, `logix-sage`, `logix-scribe`, `logix-atlas`. Link each to `cornelius` for scoped answers.
 
 ### Due-diligence suite (coordinated multi-agent)
 
-A startup due-diligence pipeline: `dd-intake` parses a pitch deck into structured data, nine specialists assess one dimension each, and `dd-lead` synthesizes a risk score and recommendation.
+Logix investment / diligence pipeline: `dd-intake` parses a pitch deck, nine specialists assess one dimension each, and `dd-lead` synthesizes a risk score and recommendation.
 
 | `name` | Dimension |
 |--------|-----------|
@@ -42,10 +53,10 @@ A startup due-diligence pipeline: `dd-intake` parses a pitch deck into structure
 
 ## Not starting points
 
-These directories are **excluded from the user-facing catalog** (`GET /api/templates` / `list_templates`) — each carries `hidden: true` in its `template.yaml`, so the exclusion is machine-enforced, not a naming convention. They stay deployable by id (e.g. `local:test-echo`) for the test/canary harness and demo scripts.
+These directories are **excluded from the user-facing catalog** (`hidden: true`). They stay deployable by id for tests and demos.
 
-- **Test/canary fixtures** — `test-echo`, `test-counter`, `test-delegator`, `test-codex`, `test-gemini`, `test-leak-hook`, `sleep-echo`. Used by the test suite and the canary harness; `test-leak-hook` is a deliberately hazardous subprocess-leak repro — do **not** deploy it in production.
-- **Demo fixtures** — `demo-researcher`, `demo-analyst`. A minimal producer→consumer shared-folder pair deployed together by the demo-fleet manifests, not a starting point to build on.
-- **Platform agent** — `trinity-system`. Auto-deployed and deletion-protected platform-operations agent; not something you create yourself.
+- **Test/canary fixtures** — `test-echo`, `test-counter`, `test-delegator`, `test-codex`, `test-gemini`, `test-leak-hook`, `sleep-echo`. Do **not** deploy `test-leak-hook` in production.
+- **Demo fixtures** — `demo-researcher`, `demo-analyst`. Logix research-network pair (`config/manifests/research-network.yaml`).
+- **Platform agent** — `logix-system`. Auto-deployed and deletion-protected; not something you create yourself.
 
-Adding a new fixture? Set `hidden: true` in its `template.yaml` so it never leaks into the catalog (a unit test guards this — see `tests/unit/test_local_templates_listing.py`).
+Adding a new fixture? Set `hidden: true` in its `template.yaml` (guarded by `tests/unit/test_local_templates_listing.py`).

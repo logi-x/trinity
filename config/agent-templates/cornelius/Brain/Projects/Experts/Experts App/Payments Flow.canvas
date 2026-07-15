@@ -1,0 +1,189 @@
+{
+  "nodes": [
+    {
+      "id": "p0000000000000a1",
+      "type": "group",
+      "x": -40,
+      "y": -120,
+      "width": 1940,
+      "height": 460,
+      "label": "Money flow (SAR settlement)",
+      "color": "4"
+    },
+    {
+      "id": "p1010000000000a1",
+      "type": "text",
+      "x": 0,
+      "y": -60,
+      "width": 440,
+      "height": 340,
+      "color": "5",
+      "text": "## 1 · Checkout & eligibility\n\nGate → charge via PSP.\n\n- `payments/payment-eligibility.ts` — KSA/BNPL eligibility (resolveTabbyEligibility)\n- `payments/payment.service.ts`\n- `payments/gateways/*` — Stripe · Noon · Tabby\n\n**Routes**\n- `app/api/v1/payments/*`\n- `app/api/webhooks/{noon,tabby}` — PSP callbacks (idempotent)"
+    },
+    {
+      "id": "p1020000000000a1",
+      "type": "text",
+      "x": 480,
+      "y": -60,
+      "width": 440,
+      "height": 340,
+      "color": "4",
+      "text": "## 2 · Settlement & earnings\n\n`src/lib/settlement/`\n\n- `record-settlement.ts`\n- `allocate-earnings.ts` → creatorEarning rows\n- `mature-earnings.ts` (maturation window)\n- `reconcile-settlements.ts`\n- `clawback-settlement.ts` (affiliate)\n- `subscription-settlement.ts`\n\nProcessing fee **2.5% absorbed from payout** (not surcharged)."
+    },
+    {
+      "id": "p1030000000000a1",
+      "type": "text",
+      "x": 960,
+      "y": -60,
+      "width": 440,
+      "height": 340,
+      "color": "3",
+      "text": "## 3 · Invoice & ZATCA\n\n`src/lib/billing/` (handlers · dto · mappers)\n\n- `billing/includes/invoice-zatca-documents.include.ts`\n- admin: `admin/queries/admin-zatca-{compliance,xml}.query.ts`\n\n**Invariants**\n- invoice_number sequence self-heals on P2002\n- signed XML immutable; CI validation **mocked** unless `ZATCA_SIMULATOR=1`"
+    },
+    {
+      "id": "p1040000000000a1",
+      "type": "text",
+      "x": 1440,
+      "y": -60,
+      "width": 440,
+      "height": 340,
+      "color": "6",
+      "text": "## 4 · Creator payout\n\n`src/lib/creator-payouts/`\n\n- `can-request-payout.ts` (maturation + threshold)\n- `owner-only-list-revenue.ts`\n- Net Revenue = Σ creatorEarning.netAmount WHERE status != cancelled\n\n**Admin**\n- `admin/payouts/*`\n- `admin/creator-payouts/*`"
+    },
+    {
+      "id": "p2010000000000a1",
+      "type": "text",
+      "x": 480,
+      "y": 420,
+      "width": 440,
+      "height": 260,
+      "color": "2",
+      "text": "## Refund path\n\n`src/lib/billing/refund/` + `billing/refunds/`\n\n- Refund **window snapshotted at requestedAt** (not process time)\n- Course subscriptions **non-refundable** (cancel-at-period-end)\n- Emits credit note → back into invoice/ZATCA"
+    },
+    {
+      "id": "p3010000000000a1",
+      "type": "text",
+      "x": 0,
+      "y": 420,
+      "width": 440,
+      "height": 300,
+      "color": "1",
+      "text": "## Invariants (money correctness)\n\n- **SAR settlement only**; price anchor = instructor currency, SAR derived + locked per checkout\n- **FX rate = 1 fail-open must never reach a charge**\n- Idempotency on every PSP webhook\n- Ledger rows append-only; ZATCA immutable\n- ZATCA after-commit failure → no auto-recovery (#1159)"
+    },
+    {
+      "id": "p4000000000000a1",
+      "type": "group",
+      "x": 940,
+      "y": 420,
+      "width": 940,
+      "height": 480,
+      "label": "Source & design notes",
+      "color": "3"
+    },
+    {
+      "id": "f4010000000000a1",
+      "type": "file",
+      "x": 960,
+      "y": 460,
+      "width": 440,
+      "height": 190,
+      "file": "Raw/sources/2026-06-11-966-event-settlement-refunds-shipped.md",
+      "color": "3"
+    },
+    {
+      "id": "f4020000000000a1",
+      "type": "file",
+      "x": 1420,
+      "y": 460,
+      "width": 440,
+      "height": 190,
+      "file": "Projects/Experts/Experts App/docs/designs/2026-04-03-noon-production-hardening.md",
+      "color": "3"
+    },
+    {
+      "id": "f4030000000000a1",
+      "type": "file",
+      "x": 960,
+      "y": 680,
+      "width": 440,
+      "height": 190,
+      "file": "Projects/Experts/Experts App/docs/designs/2026-03-31-noon-subscription-webhook.md",
+      "color": "3"
+    },
+    {
+      "id": "f4040000000000a1",
+      "type": "file",
+      "x": 1420,
+      "y": 680,
+      "width": 440,
+      "height": 190,
+      "file": "Projects/Experts/Experts App/docs/designs/2026-04-11-affiliate-v2.md",
+      "color": "3"
+    },
+    {
+      "id": "p9000000000000a1",
+      "type": "text",
+      "x": 660,
+      "y": -240,
+      "width": 600,
+      "height": 80,
+      "text": "# Payments & Billing — money flow\nZoom from [[Projects/Experts/Experts App/Experts App Map.canvas|Experts App Map]]. Paths: `apps/experts-app/`."
+    }
+  ],
+  "edges": [
+    {
+      "id": "pe010000000000a1",
+      "fromNode": "p1010000000000a1",
+      "fromSide": "right",
+      "toNode": "p1020000000000a1",
+      "toSide": "left",
+      "color": "4",
+      "label": "charge captured"
+    },
+    {
+      "id": "pe020000000000a1",
+      "fromNode": "p1020000000000a1",
+      "fromSide": "right",
+      "toNode": "p1030000000000a1",
+      "toSide": "left",
+      "color": "4",
+      "label": "issue invoice"
+    },
+    {
+      "id": "pe030000000000a1",
+      "fromNode": "p1030000000000a1",
+      "fromSide": "right",
+      "toNode": "p1040000000000a1",
+      "toSide": "left",
+      "color": "4",
+      "label": "matured → payable"
+    },
+    {
+      "id": "pe040000000000a1",
+      "fromNode": "p1020000000000a1",
+      "fromSide": "bottom",
+      "toNode": "p2010000000000a1",
+      "toSide": "top",
+      "color": "2",
+      "label": "refund"
+    },
+    {
+      "id": "pe050000000000a1",
+      "fromNode": "p2010000000000a1",
+      "fromSide": "right",
+      "toNode": "p1030000000000a1",
+      "toSide": "bottom",
+      "color": "2",
+      "label": "credit note"
+    },
+    {
+      "id": "pe060000000000a1",
+      "fromNode": "p3010000000000a1",
+      "fromSide": "top",
+      "toNode": "p1020000000000a1",
+      "toSide": "bottom",
+      "color": "1",
+      "label": "governs"
+    }
+  ]
+}

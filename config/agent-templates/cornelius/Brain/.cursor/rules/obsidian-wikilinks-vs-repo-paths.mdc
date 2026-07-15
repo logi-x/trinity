@@ -1,0 +1,60 @@
+---
+description: Split Obsidian wikilinks (vault notes) from repo/code path references — brain vault authoring for mirrored monorepo docs.
+globs:
+  - "Projects/**/*.md"
+  - "Entities/**/*.md"
+  - "Agents/**/*.md"
+  - "Tools/**/*.md"
+  - "Home.md"
+alwaysApply: false
+---
+
+# Wikilinks vs filesystem paths (brain vault)
+
+## Principle
+
+Split **note navigation** from **codebase location**:
+
+1. **Use `[[wikilinks]]` only for Obsidian notes** inside this vault (including mirrored `.md` under `Projects/**`).
+2. **Do not** use Markdown `[label](relative/path)` for repo layout, `src/…`, `app/…`, or other **on-disk code paths** — those break or mislead when the note lives in the vault, not in the repo tree.
+
+## Code and repo paths in prose
+
+- Write paths in **backticks**: `` `src/i18n/messages/` `` and add plain text, e.g. **(relative to `experts-app` root)**.
+- For paths from the **monorepo root** (e.g. `apps/experts-app/`, `docker/`), say **(relative to monorepo root)** so readers know the anchor.
+
+**Good (vault note):**
+
+```md
+i18n | next-intl — **en**, **ar**, **es** (`src/i18n/messages/`, relative to `experts-app` root)
+```
+
+**Avoid:** turning `` `src/i18n/messages/` `` into a clickable relative Markdown link from a vault note.
+
+## Optional: clickable opens on disk
+
+When you need **one-click open** from Obsidian to the real repo tree, use a stable base in YAML and `file://` links (machine-specific; document that in team onboarding).
+
+**Frontmatter (example — Experts app package):**
+
+```yaml
+repo_root: /Users/ahmedsulaimani/projects/experts/apps/experts-app
+```
+
+**Body:**
+
+```md
+[Open messages folder](file:///Users/ahmedsulaimani/projects/experts/apps/experts-app/src/i18n/messages/)
+```
+
+Prefer **one** `repo_root` per note that talks about the same package; avoid scattering different absolute bases.
+
+## Source of truth
+
+- **Canonical product docs** should stay in the **git repo**; the vault often **mirrors** or symlinks them under `Projects/Experts/Experts App/`.
+- Prefer **embed / symlink / periodic sync** over duplicating long technical docs only in Obsidian.
+- In Obsidian, keep **Automatically update internal links** enabled so **wikilink** renames/moves stay consistent (applies to `[[note]]` links, not backtick paths).
+
+## Cross-reference
+
+- [experts-docs-obsidian-frontmatter.mdc](mdc:.cursor/rules/experts-docs-obsidian-frontmatter.mdc) — tags, `category`, and optional `repo_root` alongside `title` / `date`.

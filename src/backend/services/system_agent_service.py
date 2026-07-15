@@ -1,5 +1,5 @@
 """
-System Agent Service - Auto-deployment and management of the Trinity system agent.
+System Agent Service - Auto-deployment and management of the Logix System Agent.
 
 The system agent is a privileged platform orchestrator that:
 - Is automatically deployed on platform startup
@@ -29,13 +29,13 @@ from utils.helpers import utc_now_iso
 logger = logging.getLogger(__name__)
 
 # Constants
-SYSTEM_AGENT_TEMPLATE = "local:trinity-system"
+SYSTEM_AGENT_TEMPLATE = "local:logix-system"
 SYSTEM_AGENT_TYPE = "system-orchestrator"
 SYSTEM_AGENT_OWNER = "admin"  # System agent is owned by admin
 
 
 class SystemAgentService:
-    """Service for managing the Trinity system agent."""
+    """Service for managing the Logix System Agent."""
 
     def is_deployed(self) -> bool:
         """Check if the system agent container exists."""

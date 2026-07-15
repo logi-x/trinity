@@ -17,7 +17,7 @@ import { TrinityClient } from "../src/client.js";
 async function main(): Promise<void> {
   const baseUrl = process.env.TRINITY_API_URL ?? "http://localhost:8000";
   const token = process.env.TRINITY_TOKEN;
-  const agent = process.argv[2] ?? "trinity-system";
+  const agent = process.argv[2] ?? "logix-system";
 
   if (!token) {
     console.error("set TRINITY_TOKEN to an MCP API key (trinity_mcp_...)");

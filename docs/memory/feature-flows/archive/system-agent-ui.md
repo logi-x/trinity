@@ -205,7 +205,7 @@ except Exception as e:
 
 ```python
 # src/backend/db/agents.py:16
-SYSTEM_AGENT_NAME = "trinity-system"
+SYSTEM_AGENT_NAME = "logix-system"
 ```
 
 ### Database Tables

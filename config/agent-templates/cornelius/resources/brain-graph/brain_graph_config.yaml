@@ -1,0 +1,127 @@
+# Brain Dependency Graph config — Brain V2 (LLM Wiki) vault paths.
+# Mirrors the schema in BRAIN-DEPENDENCY-GRAPH-ARCHITECTURE.md.
+
+artifact_types:
+  signal:
+    layer: 1
+    default_mode: reflective
+    vault_paths: [Raw/, Inbox/]
+    description: "Immutable sources + triage captures"
+
+  impression:
+    layer: 2
+    default_mode: reflective
+    vault_paths: [Wiki/Summaries/]
+    description: "Processed source summaries"
+
+  insight:
+    layer: 3
+    default_mode: mixed
+    vault_paths: [Wiki/Concepts/]
+    description: "Durable concepts and ideas"
+
+  framework:
+    layer: 4
+    default_mode: generative
+    vault_paths: [Actions/, Decisions/]
+    description: "Operational frameworks — actions and decisions"
+
+  lens:
+    layer: 5
+    default_mode: reflective
+    vault_paths: [Agents/, Tools/]
+    description: "Agent packs and tooling lenses"
+
+  synthesis:
+    layer: 6
+    default_mode: reflective
+    vault_paths: [Projects/]
+    description: "Project-local documentation and synthesis"
+
+  index:
+    layer: 7
+    default_mode: reflective
+    vault_paths: [Entities/]
+    description: "Named entity hubs (people, orgs, places, projects)"
+
+default_edges:
+  - from_type: signal
+    to_type: impression
+    edge_type: derives-from
+    authority: source
+
+  - from_type: impression
+    to_type: insight
+    edge_type: derives-from
+    authority: target
+
+  - from_type: insight
+    to_type: framework
+    edge_type: derives-from
+    authority: target
+
+  - from_type: framework
+    to_type: insight
+    edge_type: instantiates
+    authority: source
+
+  - from_type: insight
+    to_type: lens
+    edge_type: derives-from
+    authority: source
+
+  - from_type: framework
+    to_type: synthesis
+    edge_type: instantiates
+    authority: source
+
+  - from_type: insight
+    to_type: synthesis
+    edge_type: derives-from
+    authority: source
+
+  - from_type: insight
+    to_type: index
+    edge_type: derives-from
+    authority: source
+
+propagation:
+  edge_decay:
+    derives-from: 0.8
+    instantiates: 0.7
+    references: 0.2
+    associates: 0.05
+    tension: 0.0
+    supersedes: 1.0
+  distance_decay: [1.0, 0.5, 0.1, 0.0]
+  hub_threshold: 50
+  staleness_threshold: 0.3
+  max_propagation_depth: 3
+
+lifecycle:
+  detection_window_days: 30
+  crystallizing_threshold: 0.3
+  generative_threshold: 0.6
+  signals:
+    citation_frequency:
+      weight: 0.3
+      crystallizing_min: 5
+    generative_ratio:
+      weight: 0.3
+      crystallizing_min: 1.0
+      generative_min: 2.0
+    cross_domain_reach:
+      weight: 0.25
+      crystallizing_min: 2
+      generative_min: 3
+    temporal_acceleration:
+      weight: 0.15
+      crystallizing_min: 0.0
+
+framework_detection:
+  frontmatter_tags: [framework, model, theory, system]
+  title_patterns:
+    - "(?i)\\bframework\\b"
+    - "(?i)\\bmodel\\b"
+    - "(?i)\\bthesis\\b"
+  min_in_degree: 8

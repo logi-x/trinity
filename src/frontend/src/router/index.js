@@ -141,7 +141,7 @@ const routes = [
   // Legacy redirect for /system-agent -> agents page (consolidated)
   {
     path: '/system-agent',
-    redirect: '/agents/trinity-system'
+    redirect: '/agents/logix-system'
   },
   // Legacy redirect for /network -> Dashboard
   {

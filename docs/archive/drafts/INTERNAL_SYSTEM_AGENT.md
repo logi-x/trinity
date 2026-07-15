@@ -61,7 +61,7 @@ The system agent must be protected from deletion through all interfaces.
 
 **Acceptance Criteria**:
 - [ ] Cannot be deleted via REST API (`DELETE /api/agents/trinity-system` returns 403)
-- [ ] Cannot be deleted via MCP tool (`delete_agent("trinity-system")` returns error)
+- [ ] Cannot be deleted via MCP tool (`delete_agent("logix-system")` returns error)
 - [ ] Cannot be deleted via UI (delete button hidden/disabled)
 - [ ] Error message clearly states: "System agent cannot be deleted"
 - [ ] Admins can force re-initialization but not permanent deletion

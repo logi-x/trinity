@@ -1,0 +1,51 @@
+---
+description: Where to put new Experts monorepo subproject entry points in the vault graph — entity hub under Entities/Projects + one-way link to umbrella Experts.
+globs:
+  - "Entities/Projects/**/*.md"
+  - "Projects/Experts/**/*.md"
+  - "Agents/**/*.md"
+alwaysApply: false
+---
+
+# Experts subprojects — entity linking (vault graph)
+
+When you add or document a **distinct monorepo package** under `logi-x/experts` (e.g. **`experts-realtime`**, **`experts-prisma`**, **`experts-os`**, **`experts-app`**), treat the **Obsidian entity note** as the **single graph hub** for that surface.
+
+## Hub location (canonical)
+
+- **Path:** `Entities/Projects/<Display Name>.md`  
+  - Use a **human-readable** title in the filename (spaces allowed), e.g. `Experts Realtime.md`, `Experts OS.md`, `Experts App.md`.
+- **Purpose:** Everywhere else in the vault (guides, planning, context packs, project folders under `Projects/Experts/…`) should **link to this entity** as the **main entry point** for that subproject, instead of only linking to random folder paths. That keeps the graph centered on one node per surface.
+
+## One-way link to umbrella
+
+- In the **subproject entity**, include an explicit link **up** to the product umbrella:
+
+  `[[Entities/Projects/Experts|Experts (umbrella)]]`
+
+- **Direction:** **Child hub → parent umbrella** is the **primary** hierarchy link you add by hand for this pattern. Do **not** add a matching **parent → child** entity link in `Experts.md` **for the same relationship** if the goal is a **clean directed tree** (Obsidian will still show **backlinks** to the child from the parent file’s backlink panel without an outbound wikilink).
+- **Exception:** `Experts.md` may still list subproducts in **overview prose** for humans (badges, tables). Prefer **not** duplicating a full **Links** wikilink to every satellite if you want the graph to read as **satellites → Experts** only.
+
+## Frontmatter (align with vault rules)
+
+- Follow [experts-docs-obsidian-frontmatter.mdc](mdc:.cursor/rules/experts-docs-obsidian-frontmatter.mdc): `title`, `date`, `tags`, `category` (e.g. `Entity/Project`), `project/experts`, `project/<slug>` (e.g. `project/experts-realtime`).
+- Optional: `repo_root` pointing at the **package** on disk (e.g. `/Users/…/projects/experts/apps/experts-realtime`) for `file://` or onboarding; optional `monorepo_root` for the repo root.
+
+## Repo vs vault paths
+
+- **Monorepo package:** use backticks + anchor, e.g. `` `apps/experts-realtime/` `` (**monorepo root**). Do not fake vault-relative Markdown links to `apps/…`.
+- **Vault mirror (if any):** e.g. `Projects/Experts/Experts Realtime/` — link with **`[[wikilinks]]`** per [obsidian-wikilinks-vs-repo-paths.mdc](mdc:.cursor/rules/obsidian-wikilinks-vs-repo-paths.mdc).
+- **Architecture across packages:** [[Projects/Experts/DEVELOPER_GUIDE|Developer guide (monorepo)]].
+
+## Checklist (new subproject, e.g. experts-realtime)
+
+1. Create **`Entities/Projects/Experts Realtime.md`** (or equivalent display name).
+2. Add **`[[Entities/Projects/Experts]]`** once under a clear **Parent / umbrella** (or **Links**) section.
+3. Point deep notes **`[[Entities/Projects/Experts Realtime|…]]`** from mirrors under `Projects/Experts/…`, context packs, etc.
+4. Optionally add `repo_root` for `apps/experts-realtime` in that entity’s YAML.
+5. Do **not** rely on `Experts.md` linking back for graph purity unless product docs need an explicit index line.
+
+## Related
+
+- [obsidian-wikilinks-vs-repo-paths.mdc](mdc:.cursor/rules/obsidian-wikilinks-vs-repo-paths.mdc) — wikilinks vs code paths.
+- [experts-docs-obsidian-frontmatter.mdc](mdc:.cursor/rules/experts-docs-obsidian-frontmatter.mdc) — tags and `category`.

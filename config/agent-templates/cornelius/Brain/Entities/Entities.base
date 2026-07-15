@@ -1,0 +1,43 @@
+# Live browser of the Entities/ knowledge graph, grouped by entity type
+# (People/Tech/Places/Organizations/Agents/Projects/Topics) derived from the
+# folder — robust to the inconsistent `category` frontmatter. Embed: ![[Entities.base]].
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.inFolder("Entities")'
+    - 'category != "index"'
+    - 'file.folder != "Entities"'
+
+formulas:
+  # entity type = first folder segment under Entities/ (segment index 1)
+  type: 'file.folder.split("/").slice(1, 2).join("")'
+  updated_ago: '(now() - file.mtime).days.round(0).toString() + "d ago"'
+
+properties:
+  file.name:
+    displayName: "Entity"
+  formula.type:
+    displayName: "Type"
+  tags:
+    displayName: "Tags"
+  formula.updated_ago:
+    displayName: "Updated"
+
+views:
+  - type: table
+    name: "By Type"
+    groupBy:
+      property: formula.type
+      direction: ASC
+    order:
+      - file.name
+      - tags
+      - formula.updated_ago
+    summaries:
+      file.name: Filled
+
+  - type: cards
+    name: "All Entities"
+    order:
+      - file.name
+      - formula.type

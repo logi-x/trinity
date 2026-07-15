@@ -1,0 +1,40 @@
+# Live action tracker over Actions/ (one note per action). Embed: ![[Actions.base]].
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.inFolder("Actions")'
+    - 'status != ""'
+formulas:
+  days_to_due: 'if(due, (date(due) - today()).days, "")'
+properties:
+  file.name: {displayName: "Action"}
+  owner: {displayName: "Owner"}
+  priority: {displayName: "Priority"}
+  due: {displayName: "Due"}
+  formula.days_to_due: {displayName: "Days left"}
+  status: {displayName: "Status"}
+views:
+  - type: table
+    name: "Overdue"
+    filters:
+      and:
+        - 'status != "closed"'
+        - 'due != ""'
+        - 'date(due) < today()'
+    order: [file.name, owner, due, priority]
+    summaries: {file.name: Filled}
+  - type: table
+    name: "Open by priority"
+    filters: {and: ['status != "closed"']}
+    groupBy: {property: priority, direction: ASC}
+    order: [file.name, owner, due, formula.days_to_due]
+    summaries: {file.name: Filled}
+  - type: table
+    name: "By owner"
+    filters: {and: ['status != "closed"']}
+    groupBy: {property: owner, direction: ASC}
+    order: [file.name, priority, due, status]
+  - type: table
+    name: "Closed"
+    filters: {and: ['status == "closed"']}
+    order: [file.name, owner, date]

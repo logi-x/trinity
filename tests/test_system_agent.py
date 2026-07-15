@@ -1,7 +1,7 @@
 """
 System Agent Tests (test_system_agent.py)
 
-Tests for Trinity system agent management endpoints including:
+Tests for Logix System Agent management endpoints including:
 - System agent status checking
 - System agent restart
 - System agent re-initialization

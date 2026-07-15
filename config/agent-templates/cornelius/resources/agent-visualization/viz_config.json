@@ -1,8 +1,38 @@
 {
-  "_comment": "Canvas tuning for the public seeded KB (decision-science notes). The seeded vault is ~890 Document Insights + 141 book notes, so the impression layer gets most of the budget; every value overlays export_data.py DEFAULT_CONFIG.",
-  "max_edges": 1600,
+  "_comment": "Canvas tuning for Brain V2 (LLM Wiki). Vault mix is Projects (~450) + Raw (~360) + Actions/Decisions (~280) + Wiki Concepts (~95) + Entities (~46). Impression is tiny (Summaries only). path_floors keep Decisions/Raw/Projects from being starved by denser siblings in the same layer. Overlays export_data.py DEFAULT_CONFIG.",
+  "max_edges": 3200,
+  "node_content_cap": 6000,
   "layer_caps": {
-    "signal": 18, "impression": 480, "insight": 240,
-    "framework": 90, "lens": 14, "synthesis": 110, "index": 30
+    "signal": 120,
+    "impression": 24,
+    "insight": 140,
+    "framework": 240,
+    "lens": 40,
+    "synthesis": 260,
+    "index": 60
+  },
+  "selection": {
+    "weights": {
+      "lifecycle": 1.0,
+      "in_degree": 1.2,
+      "degree": 0.4,
+      "recency": 0.6
+    },
+    "recency_full_days": 21,
+    "always_include": {
+      "hubs": 60,
+      "tension_endpoints": true,
+      "recent_days": 21,
+      "recent_max": 100,
+      "min_ai_inferred": 8,
+      "path_floors": {
+        "Decisions/": 55,
+        "Actions/": 120,
+        "Raw/": 90,
+        "Projects/": 200,
+        "Entities/": 46,
+        "Wiki/Concepts/": 94
+      }
+    }
   }
 }

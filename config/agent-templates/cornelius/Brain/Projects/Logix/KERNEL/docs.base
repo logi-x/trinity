@@ -1,0 +1,33 @@
+# Live index of Logix Kernel curated docs/. Grouped by area (reference · guides · decisions · roadmap · meta).
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.inFolder("Projects/Logix/KERNEL/docs")'
+    - 'file.name != "docs.md"'
+
+formulas:
+  area: 'file.folder.split("/").slice(4, 5).join("")'
+  updated_ago: '(now() - file.mtime).days.round(0).toString() + "d ago"'
+
+properties:
+  file.name:
+    displayName: "Doc"
+  formula.area:
+    displayName: "Area"
+  formula.updated_ago:
+    displayName: "Updated"
+  file.mtime:
+    displayName: "Modified"
+
+views:
+  - type: table
+    name: "Curated docs"
+    groupBy:
+      property: formula.area
+      direction: ASC
+    order:
+      - file.name
+      - formula.updated_ago
+      - file.mtime
+    summaries:
+      file.name: Filled

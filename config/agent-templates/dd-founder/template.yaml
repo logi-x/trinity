@@ -3,7 +3,7 @@ display_name: DD Founder Agent
 description: Background checks, track record verification, and controversy detection for founders
 tagline: Trust but verify
 version: "1.0.0"
-author: Trinity VC Demo
+author: Logix
 
 resources:
   cpu: "2"

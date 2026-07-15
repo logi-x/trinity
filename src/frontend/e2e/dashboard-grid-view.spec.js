@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test'
  * the mode toggle + persistence, tile rendering, drag-to-cell with swap,
  * tidy/reset, and that the existing Graph/Timeline modes are untouched.
  *
- * Runs against a live stack — every install has at least `trinity-system`,
+ * Runs against a live stack — every install has at least 'logix-system',
  * so no fixtures are needed. Layout state is reset per test via
  * localStorage.
  */
@@ -37,7 +37,7 @@ test.describe('dashboard grid view (trinity-enterprise#47)', () => {
     await gotoGrid(page)
 
     // At least the system agent tile renders, with tile chrome + zones.
-    const sysTile = page.locator('.gv-tile[data-agent="trinity-system"]')
+    const sysTile = page.locator('.gv-tile[data-agent="logix-system"]')
     await expect(sysTile).toBeVisible({ timeout: 15000 })
     await expect(sysTile).toContainText('SYSTEM')
     await expect(sysTile).toContainText('Activity · 14d')
@@ -62,7 +62,7 @@ test.describe('dashboard grid view (trinity-enterprise#47)', () => {
 
   test('drag moves a tile to a free cell and persists the layout', async ({ page }) => {
     await gotoGrid(page)
-    const tile = page.locator('.gv-tile[data-agent="trinity-system"]')
+    const tile = page.locator('.gv-tile[data-agent="logix-system"]')
     await expect(tile).toBeVisible({ timeout: 15000 })
 
     const before = await page.evaluate((k) => localStorage.getItem(k), LAYOUT_KEY)

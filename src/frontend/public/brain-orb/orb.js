@@ -339,7 +339,17 @@ function buildGraph(data){
     const age=nd.age_days==null?999:nd.age_days;
     fresh[i]=Math.max(0,Math.min(1,1-age/7));   // twinkle fades over a week
     idIndex.set(nd.id,i);
-    { const tk=nd.title.toLowerCase(); if(!titleIndex.has(tk)) titleIndex.set(tk,i); }
+    // Brain V2 uses path-style [[Entities/People/Name]] links (and table-escaped
+    // [[path\|alias]]). Index title, vault-relative path, and basename.
+    { const add=k=>{ if(k && !titleIndex.has(k)) titleIndex.set(k,i); };
+      add((nd.title||'').toLowerCase());
+      const id=(nd.id||'').replace(/\\/g,'/');
+      add(id.toLowerCase());
+      if(id.toLowerCase().endsWith('.md')) add(id.slice(0,-3).toLowerCase());
+      const base=id.split('/').pop()||'';
+      add(base.toLowerCase());
+      if(base.toLowerCase().endsWith('.md')) add(base.slice(0,-3).toLowerCase());
+    }
     NODES.push({...nd, _pos:p});
   });
   const g=new THREE.BufferGeometry();
@@ -642,11 +652,32 @@ const $=id=>document.getElementById(id);
 /* render a note's markdown + [[wikilinks]] into an element; wikilinks jump if loaded */
 const _escHtml=s=>s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
 const _escAttr=s=>s.replace(/"/g,'&quot;').replace(/</g,'&lt;');
+/** Parse Obsidian wikilink inner text → {target, alias}. Supports path-style
+ *  targets, #headings, `|alias`, and table-escaped `\|alias`. */
+function _parseWl(inner){
+  let raw=String(inner||'');
+  let alias=null;
+  const pipe=raw.match(/^(.*?)(?:\\\||\|)(.*)$/);
+  if(pipe){ raw=pipe[1]; alias=pipe[2]; }
+  raw=raw.split('#')[0].trim().replace(/\\+$/,'').replace(/\\/g,'/');
+  if(raw.toLowerCase().endsWith('.md')) raw=raw.slice(0,-3);
+  const display=(alias!=null?alias: (raw.split('/').pop()||raw)).trim();
+  return {target:raw, alias:display};
+}
+function _resolveWl(target){
+  const base=String(target||'').toLowerCase().trim().replace(/\\/g,'/').replace(/\\+$/,'');
+  if(!base) return null;
+  return titleIndex.get(base)
+    ?? titleIndex.get(base.endsWith('.md')?base.slice(0,-3):base+'.md')
+    ?? titleIndex.get(base.split('/').pop());
+}
 function renderNoteInto(el, md){
   if(!md){ el.innerHTML='<span style="opacity:.5">— no body text —</span>'; return; }
-  // [[Target]] and [[Target|alias]] -> anchors (done before markdown so the parser leaves them alone)
-  let s=md.replace(/\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|([^\]]+))?\]\]/g,(m,target,alias)=>
-    `<a class="wl" data-target="${_escAttr(target.trim())}">${_escHtml((alias||target).trim())}</a>`);
+  // [[Target]], [[path/Note]], [[Target|alias]], [[path\|alias]] (table-escaped)
+  let s=md.replace(/\[\[([^\]]+)\]\]/g,(m,inner)=>{
+    const {target, alias}=_parseWl(inner);
+    return `<a class="wl" data-target="${_escAttr(target)}">${_escHtml(alias)}</a>`;
+  });
   let html;
   if(window.marked && marked.parse){
     try{ html=marked.parse(s,{breaks:true,gfm:true,mangle:false,headerIds:false}); }
@@ -660,8 +691,7 @@ function renderNoteInto(el, md){
   else { el.textContent=md; }
   // wire wikilink jumps
   el.querySelectorAll('a.wl').forEach(a=>{
-    const base=(a.dataset.target||'').toLowerCase().trim();
-    const idx=titleIndex.get(base);
+    const idx=_resolveWl(a.dataset.target||'');
     if(idx!=null){ a.classList.add('wl-live'); a.onclick=ev=>{ ev.preventDefault(); focusNode(idx); }; }
     else { a.classList.add('wl-dead'); a.title='not in the loaded graph'; a.onclick=ev=>ev.preventDefault(); }
   });

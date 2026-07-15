@@ -7,7 +7,7 @@ steps:
   - id: gather-intelligence
     name: Gather Weekly Intelligence
     type: agent_task
-    agent: acme-scout
+    agent: logix-scout
     message: |
       Compile the weekly intelligence brief:
 
@@ -26,7 +26,7 @@ steps:
     name: Add Strategic Commentary
     type: agent_task
     depends_on: gather-intelligence
-    agent: acme-sage
+    agent: logix-sage
     message: |
       Add strategic commentary to the weekly intelligence:
 
@@ -43,7 +43,7 @@ steps:
     name: Format Executive Brief
     type: agent_task
     depends_on: strategic-commentary
-    agent: acme-scribe
+    agent: logix-scribe
     message: |
       Create the weekly executive intelligence brief:
 

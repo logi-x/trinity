@@ -1,0 +1,35 @@
+title: "Scribe - Deliverables"
+description: "Content production for Logix consulting"
+refresh: 30
+
+sections:
+  - title: "Content output"
+    layout: grid
+    columns: 4
+    widgets:
+      - type: metric
+        label: "Reports"
+        value: 0
+        description: "Reports written"
+
+      - type: metric
+        label: "Proposals"
+        value: 0
+        description: "Proposals drafted"
+
+      - type: metric
+        label: "Deliverables"
+        value: 0
+        description: "Client deliverables produced"
+
+      - type: status
+        label: "Status"
+        value: "Idle"
+        color: gray
+
+  - title: ""
+    layout: list
+    widgets:
+      - type: markdown
+        content: |
+          Outputs land in `shared-out/deliverables/`. Pull from **logix-scout** + **logix-sage**; verify names with **cornelius**.

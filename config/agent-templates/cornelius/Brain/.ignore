@@ -1,0 +1,11 @@
+# ripgrep / fd ignore — scopes ad-hoc searches to curated notes.
+# These trees STAY in git; this file only affects search tools (rg, fd).
+# To search them anyway, bypass with:  rg -uu <pattern>   (or rg --no-ignore)
+
+# Imported chat / agent transcripts — 647M of archive, the main noise source
+Conversations/
+
+# Generated & vendored output
+node_modules/
+graphify-out/
+_imports/

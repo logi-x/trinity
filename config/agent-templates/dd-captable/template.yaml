@@ -3,7 +3,7 @@ display_name: DD Cap Table Agent
 description: Equity structure analysis, dilution assessment, and investor reputation check
 tagline: Who owns what
 version: "1.0.0"
-author: Trinity VC Demo
+author: Logix
 
 resources:
   cpu: "1"

@@ -37,8 +37,11 @@ try:
     HAVE_PRIMITIVES = True
 except Exception:
     HAVE_PRIMITIVES = False
-    CORE_FOLDERS = frozenset({"02-Permanent", "03-MOCs", "AI Extracted Notes", "01-Sources"})
-    SCOPE_FAMILIES = frozenset({"Books"})
+    # Brain V2 core scopes (LLM Wiki layout). Wiki is a family: Concepts + Summaries.
+    CORE_FOLDERS = frozenset({
+        "Wiki", "Entities", "Projects", "Actions", "Decisions", "Inbox", "Raw",
+    })
+    SCOPE_FAMILIES = frozenset({"Wiki", "Entities"})
 
     def scope_kind(folder):
         return "cognitive"

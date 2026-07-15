@@ -3,7 +3,7 @@ display_name: DD Market Agent
 description: TAM/SAM/SOM validation, growth rate verification, market headwinds and tailwinds
 tagline: Sizing the opportunity
 version: "1.0.0"
-author: Trinity VC Demo
+author: Logix
 
 resources:
   cpu: "2"

@@ -1,0 +1,69 @@
+# Logix Consulting Fleet
+# OPTIONAL greenfield / DR recipe — not a living roster.
+# Day-to-day: onboard agents from github.com/logi-x/logix-* under /home/logix/logix-agents.
+#
+# Templates use GitHub so recreate does not depend on config/agent-templates/*.
+# Post-deploy (manifest full-mesh is only among agents listed below):
+#   POST /api/agents/{each}/permissions/cornelius
+
+name: logix
+description: Logix Consulting AI Team - Atlas, Scout, Sage, Scribe
+
+agents:
+  atlas:
+    template: github:logi-x/logix-atlas
+    folders:
+      expose: true
+      consume: true
+    resources:
+      memory: 4g
+      cpu: "2"
+
+  scout:
+    template: github:logi-x/logix-scout
+    folders:
+      expose: true
+      consume: false
+    resources:
+      memory: 2g
+      cpu: "1"
+
+  sage:
+    template: github:logi-x/logix-sage
+    folders:
+      expose: true
+      consume: true
+    resources:
+      memory: 2g
+      cpu: "1"
+
+  scribe:
+    template: github:logi-x/logix-scribe
+    folders:
+      expose: true
+      consume: true
+    resources:
+      memory: 2g
+      cpu: "1"
+
+permissions:
+  preset: full-mesh
+
+auto_start: true
+
+trinity_prompt: |
+  You are part of the Logix consulting AI team.
+
+  Team members (agent names from this manifest):
+  - Atlas (logix-atlas): General assistant / orchestrator
+  - Scout (logix-scout): Market research analyst
+  - Sage (logix-sage): Strategic advisor
+  - Scribe (logix-scribe): Content writer
+  - Cornelius (cornelius): Second brain / institutional memory (when present)
+
+  Collaborate effectively:
+  1. Prefer specialists for their domain; Atlas handles ad-hoc and multi-domain routing
+  2. Check shared folders for team outputs
+  3. Use Trinity MCP to communicate with teammates
+  4. Save work to shared-out for others to access
+  5. Ask Cornelius for known Logix client/org facts before inventing them

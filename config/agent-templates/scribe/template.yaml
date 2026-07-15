@@ -1,8 +1,20 @@
+# Canonical source: github:logi-x/logix-scribe (checkout: /home/logix/logix-agents/logix-scribe)
+# This local: mirror is for bootstrap / template bind only — edit the GitHub repo.
 name: scribe
 display_name: Scribe - Content Writer
-description: Professional content writer that creates reports, proposals, and client deliverables
+description: |
+  Logix content writer - produces reports, proposals, and client deliverables
+  from Scout research and Sage strategy, with facts checked via Cornelius.
 type: content-agent
 priority: 20
+author: Logix
+version: "1.1.0"
+updated: "2026-07-15"
+tagline: Client-ready writing for Logix engagements
+
+resources:
+  cpu: "1"
+  memory: "2g"
 
 capabilities:
   - report-writing
@@ -10,6 +22,15 @@ capabilities:
   - document-formatting
   - executive-summaries
   - presentation-outlines
+  - agent-collaboration
+  - citation-preservation
+  - artifact-contract
+
+use_cases:
+  - "Write client reports from Scout + Sage packs"
+  - "Draft Logix proposals for Experts/HoWA-style work"
+  - "Executive summaries for leadership"
+  - "Verify names and open actions with Cornelius"
 
 commands:
   - name: report
@@ -28,20 +49,27 @@ commands:
     description: Check recent content production
     usage: /status
 
-folders:
+shared_folders:
   expose: true
   consume: true
+
+# Trinity MCP is platform-injected at runtime (see inject_trinity_mcp_if_configured).
+mcp_servers: []
 
 metrics:
   - name: reports_written
     type: counter
+    label: "Reports"
     description: Number of reports created
   - name: proposals_drafted
     type: counter
+    label: "Proposals"
     description: Proposals drafted
   - name: deliverables_produced
     type: counter
+    label: "Deliverables"
     description: Client deliverables produced
   - name: content_status
     type: status
+    label: "Status"
     description: Current content production status

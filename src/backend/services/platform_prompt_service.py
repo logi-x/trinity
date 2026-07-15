@@ -149,7 +149,7 @@ The `execution_id` is in the **Execution Context** block below. The platform sto
 # PLATFORM_INSTRUCTIONS above document them that way. Codex auto-discovers MCP
 # tools from the configured ``trinity`` server and invokes them by their bare
 # names, so the Claude-only prefix must be stripped for Codex agents — otherwise
-# the model emits ``mcp__trinity`` and Codex answers "unknown MCP server".
+# the model emits ``mcp__logix`` and Codex answers "unknown MCP server".
 # Mirrors runtime_adapter._CODEX_RUNTIMES (the only non-Claude-named surface in
 # the MVP); Gemini and unknown runtimes keep the canonical Claude naming.
 _CODEX_RUNTIMES = frozenset({"codex"})

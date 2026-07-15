@@ -1,0 +1,26 @@
+# Live decision log over Decisions/ (one note per decision). Embed: ![[Decisions.base]].
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.inFolder("Decisions")'
+formulas:
+  review_due: 'if(review_by, (date(review_by) - today()).days, "")'
+properties:
+  file.name: {displayName: "Decision"}
+  stakeholders: {displayName: "Stakeholders"}
+  date: {displayName: "Decided"}
+  review_by: {displayName: "Review by"}
+  formula.review_due: {displayName: "Days to review"}
+views:
+  - type: table
+    name: "Due for review"
+    filters:
+      and:
+        - 'review_by != ""'
+        - 'date(review_by) <= today()'
+    order: [file.name, stakeholders, review_by, date]
+    summaries: {file.name: Filled}
+  - type: table
+    name: "All decisions"
+    order: [file.name, stakeholders, date, review_by, formula.review_due]
+    summaries: {file.name: Filled}

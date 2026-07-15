@@ -1,9 +1,9 @@
 # =============================================================================
-# VC DUE DILIGENCE PROCESS
+# LOGIX DUE DILIGENCE PROCESS
 # =============================================================================
 # "9 analysts. 60 seconds. One verdict."
 #
-# A comprehensive multi-agent due diligence process that:
+# Multi-agent due diligence for Logix:
 # 1. Parses pitch deck (Intake)
 # 2. Runs 9 specialist analyses in parallel
 # 3. Synthesizes findings (Deal Lead)
@@ -14,7 +14,7 @@
 name: vc-due-diligence
 version: 1
 description: |
-  Comprehensive VC due diligence - from pitch deck to investment decision.
+  Logix due diligence - from pitch deck to investment decision.
   9 specialist agents analyze in parallel, findings synthesized, human approval.
 
 # =============================================================================

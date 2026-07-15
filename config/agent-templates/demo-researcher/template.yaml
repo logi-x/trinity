@@ -2,10 +2,10 @@ name: demo-researcher
 # Excluded from the user-facing template catalog (GET /api/templates). See README "Not starting points". (#1513)
 hidden: true
 display_name: Research Agent
-description: Autonomous researcher that gathers and summarizes information on trending topics
-tagline: Discovers trends and opportunities
+description: Autonomous Logix researcher that gathers and summarizes trends relevant to product and client work
+tagline: Discovers Logix-relevant trends and opportunities
 version: "1.0.0"
-author: Trinity Demo
+author: Logix
 
 resources:
   cpu: "1"
@@ -38,7 +38,7 @@ schedules:
     message: "/research"
     description: Regular research cycle
 
-# Custom metrics displayed in Trinity UI
+# Custom metrics displayed in the UI
 metrics:
   - name: research_cycles
     type: counter

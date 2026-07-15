@@ -7,7 +7,7 @@ Reads (read-only):
   - resources/brain-graph/data/graph_enrichments.json   (layer, lifecycle, staleness, typed edges, tensions)
   - resources/local-brain-search/data/q_values.json      (usage heat, optional)
   - resources/local-brain-search/data/brain_graph.pkl    (reference-scope overlay, optional — needs networkx)
-  - Brain/05-Meta/Thinking/THINKING-REGISTRY.md           (incubation topics, optional)
+  - Brain/Log.md                                         (append-only ops log, optional)
 
 Writes:
   - resources/agent-visualization/data.json  (matches SPEC.md §7 contract)
@@ -42,8 +42,11 @@ try:
         SCOPE_FAMILIES, is_reference_scope, scope_kind, reference_folders,
     )
 except Exception:
-    CORE_FOLDERS = frozenset({"02-Permanent", "03-MOCs", "AI Extracted Notes", "01-Sources"})
-    SCOPE_FAMILIES = frozenset({"Books"})
+    # Brain V2 (LLM Wiki) fallback when local-brain-search is absent.
+    CORE_FOLDERS = frozenset({
+        "Wiki", "Entities", "Projects", "Actions", "Decisions", "Inbox", "Raw",
+    })
+    SCOPE_FAMILIES = frozenset({"Wiki", "Entities"})
     def scope_of(nid):
         return str(nid).replace("\\", "/").split("/", 1)[0]
     def scope_id(nid):
@@ -65,7 +68,7 @@ except Exception:
 ENRICH = os.path.join(REPO, "resources/brain-graph/data/graph_enrichments.json")
 QVALS = os.path.join(REPO, "resources/local-brain-search/data/q_values.json")
 GRAPH_PKL = os.path.join(REPO, "resources/local-brain-search/data/brain_graph.pkl")
-REGISTRY = os.path.join(REPO, "Brain/05-Meta/Thinking/THINKING-REGISTRY.md")
+REGISTRY = os.path.join(REPO, "Brain/Log.md")
 DASHBOARD = os.path.join(REPO, "dashboard.yaml")
 BRAIN_GRAPH = os.path.join(REPO, "resources/brain-graph/run_brain_graph.sh")
 VAULT = os.path.join(REPO, "Brain")
@@ -87,15 +90,14 @@ LAYER_NUM = {
 VIZ_CONFIG = os.path.join(HERE, "viz_config.json")
 
 DEFAULT_CONFIG = {
-    # budgets that keep the canvas legible
-    "max_edges": 1600,           # edge budget for a readable canvas
+    # budgets that keep the canvas legible (Brain V2 defaults; viz_config.json overlays)
+    "max_edges": 3200,           # edge budget for a readable canvas
     "node_content_cap": 6000,    # max chars of body embedded per node
-    # how many nodes to keep per layer. The giant "insight" layer is down-sampled;
-    # the small/structural layers are kept ~whole. Total on canvas ≈ sum of these
-    # plus a bounded number of guaranteed "always-include" extras (see selection).
+    # Layer caps for V2 mix: Projects=synthesis, Raw=signal, Actions/Decisions=
+    # framework, Wiki/Concepts=insight, Entities=index. Impression (Summaries) is tiny.
     "layer_caps": {
-        "signal": 18, "impression": 18, "insight": 240, "framework": 90,
-        "lens": 14, "synthesis": 110, "index": 30,
+        "signal": 120, "impression": 24, "insight": 140, "framework": 240,
+        "lens": 40, "synthesis": 260, "index": 60,
     },
     # WHAT goes on the canvas (applied in main()): a weighted salience score plus
     # guaranteed sets so the important structure is never sampled out.
@@ -106,13 +108,23 @@ DEFAULT_CONFIG = {
             "degree": 0.4,      #   total connectivity
             "recency": 0.6,     #   recently touched = current thinking
         },
-        "recency_full_days": 14,        # touched within N days → full recency score
+        "recency_full_days": 21,        # touched within N days → full recency score
         "always_include": {
-            "hubs": 40,                 # top-N most-referenced (in-degree) notes
+            "hubs": 60,                 # top-N most-referenced (in-degree) notes
             "tension_endpoints": True,  # both ends of every real tension (red seams)
-            "recent_days": 14,          # include notes touched within N days...
-            "recent_max": 60,           # ...up to this many (highest-scoring first)
-            "min_ai_inferred": 12,      # floor of ai-inferred notes (the membrane story)
+            "recent_days": 21,          # include notes touched within N days...
+            "recent_max": 100,          # ...up to this many (highest-scoring first)
+            "min_ai_inferred": 8,       # floor of ai-inferred notes (the membrane story)
+            # Brain V2: keep thinner prefixes from being starved by denser siblings
+            # that share a layer (e.g. Decisions vs Actions under framework).
+            "path_floors": {
+                "Decisions/": 55,
+                "Actions/": 120,
+                "Raw/": 90,
+                "Projects/": 200,
+                "Entities/": 46,
+                "Wiki/Concepts/": 94,
+            },
         },
     },
 }
@@ -217,6 +229,16 @@ def provenance_from_path(note_id):
         return "reference"
     if "AI Crystallizations" in p:
         return "ai-inferred"
+    # Brain V2 paths
+    if p.startswith("Wiki/Concepts/") or p.startswith("Entities/"):
+        return "endorsed"
+    if p.startswith("Wiki/Summaries/") or p.startswith("Raw/") or p.startswith("Inbox/"):
+        return "encountered"
+    if p.startswith("Decisions/") or p.startswith("Actions/"):
+        return "originated"
+    if p.startswith("Projects/") or p.startswith("Agents/"):
+        return "endorsed"
+    # Legacy V1 paths (Brain copy / old exports)
     if "AI Extracted Notes" in p:
         return "originated"
     if "Document Insights" in p:
@@ -283,7 +305,15 @@ def reference_overlay(render_scope):
 # Dependency Graph pipeline yet (the public template's seeded KB, or any fresh
 # user vault — trinity-enterprise#76). Deterministic; the full BDG path takes
 # over automatically once graph_enrichments.json exists.
+# Brain V2 top-level → layer. Finer Wiki/Entities prefixes handled in
+# _layer_lifecycle_for_path below. Legacy V1 folder names kept for old clones.
 _FALLBACK_LAYER = {
+    # V2
+    "Inbox": "signal", "Raw": "signal",
+    "Wiki": "insight", "Entities": "index",
+    "Projects": "synthesis", "Actions": "framework", "Decisions": "framework",
+    "Agents": "lens", "Tools": "lens",
+    # V1 (legacy)
     "00-Inbox": "signal", "01-Sources": "signal",
     "Document Insights": "impression", "Books": "impression",
     "AI Extracted Notes": "insight", "02-Permanent": "insight",
@@ -293,45 +323,123 @@ _FALLBACK_LAYER = {
     "03-MOCs": "index",
 }
 _FALLBACK_LIFECYCLE = {
+    # V2
+    "Entities": 0.55, "Wiki": 0.45, "Projects": 0.4,
+    "Decisions": 0.4, "Actions": 0.35, "Agents": 0.3, "Tools": 0.25,
+    # V1 (legacy)
     "03-MOCs": 0.55, "02-Permanent": 0.45, "04-Output": 0.4,
     "AI Extracted Notes": 0.35, "06-Belief-System": 0.35,
 }
-_WIKILINK = re.compile(r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]")
+# Capture full [[...]] inners; aliases may use `|` or table-escaped `\|`.
+_WIKILINK = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def _parse_wikilink(inner):
+    """Return vault target string from a wikilink inner (path or title).
+
+    Supports `#heading`, `|alias`, and table-escaped `\\|alias`. Trailing
+    backslashes (from `\\|`) are stripped so path-style Brain V2 links resolve.
+    """
+    raw = str(inner or "")
+    m = re.match(r"^(.*?)(?:\\\||\|)(.*)$", raw)
+    if m:
+        raw = m.group(1)
+    raw = raw.split("#", 1)[0].strip().rstrip("\\").replace("\\", "/")
+    if raw.lower().endswith(".md"):
+        raw = raw[:-3]
+    return raw
+
+
+def _register_note_keys(title_to_id, nid):
+    """Index a note under title stem, vault-relative path, and basename."""
+    stem = os.path.splitext(os.path.basename(nid))[0].strip().lower()
+    title_to_id.setdefault(stem, nid)
+    no_ext = nid[:-3] if nid.lower().endswith(".md") else nid
+    title_to_id.setdefault(no_ext.lower(), nid)
+    title_to_id.setdefault(nid.lower(), nid)
+
+
+def _resolve_wikilink(title_to_id, target):
+    key = _parse_wikilink(target).lower()
+    if not key:
+        return None
+    return (
+        title_to_id.get(key)
+        or title_to_id.get(key + ".md")
+        or title_to_id.get(key.split("/")[-1])
+    )
+
+
+def _layer_lifecycle_for_path(nid):
+    """Map a Brain-relative path to (layer, lifecycle) for the wikilink fallback."""
+    p = nid.replace("\\", "/")
+    if p.startswith("Inbox/") or p in ("Inbox.md",):
+        return "signal", 0.15
+    if p.startswith("Raw/"):
+        return "signal", 0.15
+    if p.startswith("Wiki/Summaries/"):
+        return "impression", 0.3
+    if p.startswith("Wiki/Concepts/") or p.startswith("Wiki/"):
+        return "insight", 0.45
+    if p.startswith("Entities/"):
+        return "index", 0.55
+    if p.startswith("Projects/"):
+        return "synthesis", 0.4
+    if p.startswith("Actions/") or p.startswith("Decisions/"):
+        return "framework", 0.4
+    if p.startswith("Agents/") or p.startswith("Tools/"):
+        return "lens", 0.3
+    if p in ("Index.md", "README.md", "AGENTS.md", "CLAUDE.md", "Log.md",
+             "CRITICAL_FACTS.md"):
+        return "index", 0.6
+    top = scope_of(nid)
+    return (
+        _FALLBACK_LAYER.get(top, "insight"),
+        _FALLBACK_LIFECYCLE.get(top, 0.2),
+    )
 
 
 def build_fallback_enrichments():
     """Enrichment-shaped {nodes, edges, tensions} scanned straight from the
     vault: every Brain/**/*.md is a node (layer/lifecycle from its folder),
-    every resolvable [[wikilink]] is a `references` edge. Wikilink targets are
-    TITLES, not paths — resolved via a basename + H1 index (sorted walk, first
-    occurrence wins, so resolution is deterministic)."""
+    every resolvable [[wikilink]] is a `references` edge.
+
+    Targets may be titles OR vault-relative paths (Brain V2 style). Aliases use
+    `|` or table-escaped `\\|`. Resolved via path + basename + H1 index
+    (sorted walk, first occurrence wins).
+    """
     nodes, edges = {}, {}
     title_to_id = {}
     bodies = {}
     if not os.path.isdir(VAULT):
         return {"nodes": nodes, "edges": edges, "tensions": []}
-    files = sorted(
-        os.path.join(dp, f)
-        for dp, _dn, fn in os.walk(VAULT) for f in fn if f.endswith(".md")
-    )
+    files = []
+    for dp, dn, fn in os.walk(VAULT):
+        dn[:] = [d for d in dn if not d.startswith(".")]  # skip .obsidian, .git, …
+        for f in fn:
+            if f.endswith(".md") and not f.startswith("."):
+                files.append(os.path.join(dp, f))
+    files.sort()
     for path in files:
         nid = os.path.relpath(path, VAULT).replace("\\", "/")
-        top = scope_of(nid)
+        layer, lifecycle = _layer_lifecycle_for_path(nid)
         nodes[nid] = {
-            "layer": _FALLBACK_LAYER.get(top, "insight"),
-            "lifecycle": _FALLBACK_LIFECYCLE.get(top, 0.2),
+            "layer": layer,
+            "lifecycle": lifecycle,
             "staleness_score": 0.0,
         }
-        stem = os.path.splitext(os.path.basename(nid))[0].strip().lower()
-        title_to_id.setdefault(stem, nid)
+        _register_note_keys(title_to_id, nid)
         body = read_text(path, limit=200_000)
         bodies[nid] = body
         m = re.search(r"^#\s+(.+)$", body[:2000], re.M)
         if m:
             title_to_id.setdefault(m.group(1).strip().lower(), nid)
+        tm = re.search(r"^title:\s*[\"']?(.+?)[\"']?\s*$", body[:800], re.M)
+        if tm:
+            title_to_id.setdefault(tm.group(1).strip().lower(), nid)
     for nid, body in bodies.items():
         for m in _WIKILINK.finditer(body):
-            tgt = title_to_id.get(m.group(1).strip().lower())
+            tgt = _resolve_wikilink(title_to_id, m.group(1))
             if tgt and tgt != nid:
                 edges.setdefault(f"{nid}||{tgt}",
                                  {"edge_type": "references", "confidence": 0.6})
@@ -556,6 +664,24 @@ def main():
             if nid not in selected:
                 take(nid)
                 have_ai += 1
+    # path-prefix floors (Brain V2): keep thinner folders from losing to denser
+    # siblings that share a layer (Decisions vs Actions, etc.).
+    for prefix, floor in (inc.get("path_floors") or {}).items():
+        floor = int(floor or 0)
+        if floor <= 0 or not prefix:
+            continue
+        pref = str(prefix).replace("\\", "/")
+        cands = sorted(
+            (n for n in raw_nodes if n.replace("\\", "/").startswith(pref)),
+            key=lambda k: -scored[k],
+        )
+        have_p = sum(1 for n in selected if n.replace("\\", "/").startswith(pref))
+        for nid in cands:
+            if have_p >= floor:
+                break
+            if nid not in selected:
+                take(nid)
+                have_p += 1
 
     # fill each layer up to its cap by score (preserves the 7-layer altitude) --
     by_layer = {}
@@ -662,23 +788,14 @@ def main():
         add_edge(s, t, m)
 
     # ---- tensions -----------------------------------------------------------
+    # Only real BDG-detected tensions. Do NOT synthesize demo seams — empty is
+    # honest when the live graph has 0 contradictions (Brain V2 wikilink fallback).
     out_tensions = []
     for t in raw_tensions:
         a = t.get("a") or t.get("source")
         b = t.get("b") or t.get("target")
         if a in sel_ids and b in sel_ids:
             out_tensions.append({"a": a, "b": b, "strength": round(float(t.get("strength", 0.6)), 2)})
-
-    # If the live graph has no tension edges yet, synthesize a few demo seams so
-    # the "tension pulses red / immune to staleness" feature is demonstrable.
-    # Flagged demo:true so they are never mistaken for detected contradictions.
-    if not out_tensions and len(out_nodes) >= 6:
-        hot = sorted(out_nodes, key=lambda n: -n["heat"])[:12]
-        for i in range(0, min(6, len(hot) - 1), 2):
-            out_tensions.append({
-                "a": hot[i]["id"], "b": hot[i + 1]["id"],
-                "strength": round(0.6 + 0.05 * i, 2), "demo": True,
-            })
 
     # ---- incubation topics + real converged conclusions ---------------------
     # (registry + converged already parsed above so selection could guarantee the nodes)
@@ -808,10 +925,13 @@ def build_metrics(raw_nodes, have_enrich=True):
     fw = sum(1 for n in raw_nodes.values() if n.get("layer") == "framework")
     cards = [
         {"label": "notes indexed", "value": len(ids), "hint": "in the graph"},
-        {"label": "permanent", "value": count_prefix("02-Permanent/"), "hint": "atomic insights"},
-        {"label": "ai-extracted", "value": count_prefix("AI Extracted Notes/"), "hint": "your own, mined"},
-        {"label": "doc insights", "value": count_prefix("Document Insights/"), "hint": "research extracts"},
-        {"label": "frameworks", "value": fw, "hint": "structured models"},
+        {"label": "concepts", "value": count_prefix("Wiki/Concepts/"), "hint": "durable ideas"},
+        {"label": "entities", "value": count_prefix("Entities/"), "hint": "named graph nodes"},
+        {"label": "projects", "value": count_prefix("Projects/") + count_prefix("Entities/Projects/"),
+         "hint": "project hubs + docs"},
+        {"label": "raw / inbox", "value": count_prefix("Raw/") + count_prefix("Inbox/"),
+         "hint": "evidence + captures"},
+        {"label": "frameworks", "value": fw, "hint": "actions + decisions"},
     ]
 
     # authoritative lifecycle / health from the brain-graph engine

@@ -36,7 +36,7 @@ from .agent_settings import (
 from utils.helpers import utc_now_iso
 
 # System agent name constant
-SYSTEM_AGENT_NAME = "trinity-system"
+SYSTEM_AGENT_NAME = "logix-system"
 
 
 class AgentOperations(

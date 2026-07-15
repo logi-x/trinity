@@ -3,7 +3,7 @@ display_name: DD Business Model Agent
 description: Revenue model analysis, unit economics viability, and path to profitability
 tagline: Does the math work?
 version: "1.0.0"
-author: Trinity VC Demo
+author: Logix
 
 resources:
   cpu: "1"

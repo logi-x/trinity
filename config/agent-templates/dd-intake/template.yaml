@@ -3,7 +3,7 @@ display_name: DD Intake Agent
 description: Parse pitch decks and extract structured data for due diligence specialists
 tagline: The front door to due diligence
 version: "1.0.0"
-author: Trinity VC Demo
+author: Logix
 
 resources:
   cpu: "1"

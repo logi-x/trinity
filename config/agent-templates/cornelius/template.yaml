@@ -1,12 +1,13 @@
 # Trinity-Compatible Agent Configuration
-# Cornelius - The Insight Harvester & Second Brain Partner
+# Cornelius - Logix Insight Harvester & Second Brain Partner
 
 # Required Fields
 name: cornelius
 display_name: "Cornelius"
 type: knowledge-base
 description: |
-  AI Insight Harvester and Second Brain Partner managing a personal Obsidian knowledge base.
+  Logix AI Insight Harvester and Second Brain Partner managing the Obsidian knowledge base
+  (Experts, HoWA, people, decisions, actions).
 
   Core capabilities:
   - Problem-Solving & Advice: Ground advice in accumulated KB insights and personal frameworks
@@ -23,8 +24,8 @@ resources:
 
 # Optional Metadata
 version: "1.25.0"
-author: "Trinity"
-updated: "2026-03-12"
+author: "Logix"
+updated: "2026-07-15"
 tagline: "Your insight harvester, second brain partner, and KB-grounded advisor"
 
 use_cases:
@@ -175,7 +176,7 @@ git:
   commit_paths:
     - memory/
     - plans/
-    - Brain/
+    - brain/
     - outputs/
   ignore_paths:
     - .mcp.json
@@ -205,13 +206,13 @@ metrics:
     unit: "notes"
   - name: permanent_notes
     type: gauge
-    label: "Permanent Notes"
-    description: "Core atomic insights (02-Permanent + AI Extracted)"
+    label: "Concepts"
+    description: "Durable concepts in Wiki/Concepts"
     unit: "notes"
   - name: document_insights
     type: gauge
-    label: "Document Insights"
-    description: "Research session extractions"
+    label: "Raw Sources"
+    description: "Immutable evidence under Raw/"
     unit: "notes"
   - name: insights_extracted
     type: counter

@@ -1,13 +1,13 @@
 name: vc-due-diligence
-display_name: VC Due Diligence Pipeline
+display_name: Logix Due Diligence Pipeline
 description: |
-  Comprehensive multi-agent venture capital due diligence process.
+  Comprehensive multi-agent due diligence process for Logix.
   9 specialist agents analyze in parallel, synthesize findings,
-  and deliver investment recommendation with human approval gate.
+  and deliver an investment recommendation with a human approval gate.
 category: finance
 complexity: advanced
 version: "1.0.0"
-author: Trinity Demo
+author: Logix
 
 tags:
   - venture-capital

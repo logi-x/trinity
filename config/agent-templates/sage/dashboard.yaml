@@ -1,0 +1,35 @@
+title: "Sage - Strategy"
+description: "Strategic analysis activity for Logix consulting"
+refresh: 30
+
+sections:
+  - title: "Strategy output"
+    layout: grid
+    columns: 4
+    widgets:
+      - type: metric
+        label: "Strategies"
+        value: 0
+        description: "Strategies developed"
+
+      - type: metric
+        label: "Recommendations"
+        value: 0
+        description: "Recommendations provided"
+
+      - type: metric
+        label: "Briefings"
+        value: 0
+        description: "Executive briefings created"
+
+      - type: status
+        label: "Status"
+        value: "Idle"
+        color: gray
+
+  - title: ""
+    layout: list
+    widgets:
+      - type: markdown
+        content: |
+          Outputs land in `shared-out/strategy/`. Inputs from **logix-scout**; hand off to **logix-scribe**. Ground facts via **cornelius**.

@@ -3,7 +3,7 @@
 ``PLATFORM_INSTRUCTIONS`` documents the Trinity MCP tools with Claude Code's
 ``mcp__trinity__<tool>`` naming. Codex auto-discovers MCP tools from the
 configured ``trinity`` server and calls them by their bare names — the
-Claude-only prefix makes a Codex model emit ``mcp__trinity`` → "unknown MCP
+Claude-only prefix makes a Codex model emit ``mcp__logix`` → "unknown MCP
 server". So the platform prompt must be runtime-aware:
 
   * ``runtime="codex"`` → no ``mcp__trinity__`` prefix anywhere, plus a short

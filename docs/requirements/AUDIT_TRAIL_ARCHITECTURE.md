@@ -311,7 +311,7 @@ class AuditService:
             actor_email = None
         elif mcp_scope == "system":
             actor_type = "system"
-            actor_id = "trinity-system"
+            actor_id = "logix-system"
             actor_email = None
         else:
             actor_type = "mcp_client"

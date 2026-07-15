@@ -1,0 +1,15 @@
+{
+    "name": "@logi-x/brain",
+    "private": true,
+    "scripts": {
+      "format:docs": "find . -type f \\( -name '*.md' -o -name '*.mdx' \\) ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/graphify-out/*' -print0 | xargs -0 -n 25 prettier --write --cache",
+      "format:docs:check": "NODE_OPTIONS=--max-old-space-size=16384 prettier --check \"**/Conversations/**/*.md\" \"**/Conversations/**/*.mdx\"",
+      "format:check": "prettier --check \"**/*.md\"",
+      "codegraph:init": "codegraph init",
+      "codegraph:sync": "codegraph sync",
+      "format:fix": "prettier --check \"**/*.md\" --write"
+    },
+    "devDependencies": {
+      "prettier": "^3.9.4"
+    }
+  }

@@ -16,7 +16,7 @@ import { test, expect, request } from '@playwright/test'
  * exist; the suite skips cleanly if the detail page can't load.
  */
 
-const TEST_AGENT = process.env.TEST_AGENT || 'trinity-system'
+const TEST_AGENT = process.env.TEST_AGENT || 'logix-system'
 
 function cbResponse(state) {
   return {

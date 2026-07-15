@@ -1,0 +1,50 @@
+# Projects browser — live view over all notes under Projects/.
+# Grouped by the `category` frontmatter (projects/<name>). Generated index
+# hubs (category: index) are excluded. Embed in a note with ![[Projects.base]].
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.inFolder("Projects")'
+    - 'category != "index"'
+    - 'archived != true'
+
+formulas:
+  # Top-level project folder under Projects/ (e.g. Experts, HoWA, Logix),
+  # robust to any nesting depth. split/slice/join are all documented Bases fns.
+  project: 'file.folder.split("/").slice(1, 2).join("")'
+  updated_ago: '(now() - file.mtime).days.round(0).toString() + "d ago"'
+
+properties:
+  file.name:
+    displayName: "Note"
+  formula.project:
+    displayName: "Project"
+  category:
+    displayName: "Category"
+  tags:
+    displayName: "Tags"
+  file.mtime:
+    displayName: "Modified"
+  formula.updated_ago:
+    displayName: "Updated"
+
+views:
+  - type: table
+    name: "By Project"
+    groupBy:
+      property: formula.project
+      direction: ASC
+    order:
+      - file.name
+      - category
+      - formula.updated_ago
+      - file.mtime
+    summaries:
+      file.name: Filled
+
+  - type: cards
+    name: "All Notes"
+    order:
+      - file.name
+      - formula.project
+      - formula.updated_ago

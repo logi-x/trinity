@@ -1,0 +1,35 @@
+title: "Scout - Research"
+description: "Market research activity for Logix consulting"
+refresh: 30
+
+sections:
+  - title: "Research output"
+    layout: grid
+    columns: 4
+    widgets:
+      - type: metric
+        label: "Reports"
+        value: 0
+        description: "Research reports generated"
+
+      - type: metric
+        label: "Markets"
+        value: 0
+        description: "Markets analyzed"
+
+      - type: metric
+        label: "Opportunities"
+        value: 0
+        description: "Opportunities identified"
+
+      - type: status
+        label: "Status"
+        value: "Idle"
+        color: gray
+
+  - title: ""
+    layout: list
+    widgets:
+      - type: markdown
+        content: |
+          Outputs land in `shared-out/research/`. Teammates: **logix-sage**, **logix-scribe**, **cornelius**.

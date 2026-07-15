@@ -236,7 +236,7 @@ from services.docker_service import docker_client
 from dependencies import decode_token
 from services.audit_service import log_audit_event
 
-SYSTEM_AGENT_NAME = "trinity-system"
+SYSTEM_AGENT_NAME = "logix-system"
 
 @router.websocket("/ws/terminal")
 async def system_agent_terminal(

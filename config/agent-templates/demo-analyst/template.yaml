@@ -2,10 +2,10 @@ name: demo-analyst
 # Excluded from the user-facing template catalog (GET /api/templates). See README "Not starting points". (#1513)
 hidden: true
 display_name: Analysis Agent
-description: Synthesizes research findings and answers strategic questions
-tagline: Strategic insights from research
+description: Synthesizes Logix research findings and answers strategic questions
+tagline: Strategic insights for Logix from research
 version: "1.0.0"
-author: Trinity Demo
+author: Logix
 
 avatar_prompt: A thoughtful analyst surrounded by floating data visualizations and charts, wearing smart-casual attire with reading glasses, warm studio lighting, contemplative expression
 
@@ -44,7 +44,7 @@ schedules:
     message: "/briefing"
     description: Daily synthesis of research findings
 
-# Custom metrics displayed in Trinity UI
+# Custom metrics displayed in the UI
 metrics:
   - name: briefings_generated
     type: counter
