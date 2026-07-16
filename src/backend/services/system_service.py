@@ -151,8 +151,13 @@ def validate_manifest(manifest: SystemManifest) -> List[str]:
                 if source not in agent_names:
                     raise ValueError(f"Unknown agent in permissions: {source}")
                 for target in targets:
-                    if target not in agent_names:
-                        raise ValueError(f"Unknown agent in permissions: {target}")
+                    # A target may be a manifest member (short name, prefixed at deploy)
+                    # or an already-deployed agent outside this system (e.g. cornelius).
+                    if target in agent_names:
+                        continue
+                    if db.get_agent_owner(target) is not None:
+                        continue
+                    raise ValueError(f"Unknown agent in permissions: {target}")
 
     # Validate schedules (if any)
     for agent_name, config in manifest.agents.items():
@@ -324,7 +329,9 @@ async def configure_permissions(
             if not source:
                 logger.warning(f"Unknown source agent in permissions: {source_short}")
                 continue
-            targets = [agent_names[t] for t in target_shorts if t in agent_names]
+            # Manifest members resolve short -> final; anything else is already a
+            # deployed agent name (validated above) and passes through verbatim.
+            targets = [agent_names.get(t, t) for t in target_shorts]
             # set_agent_permissions does a full replacement
             db.set_agent_permissions(source, targets, created_by)
             permissions_count += len(targets)

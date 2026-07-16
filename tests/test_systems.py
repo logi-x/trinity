@@ -1048,6 +1048,46 @@ permissions:
         )
         assert_status(response, 400)
 
+    def test_explicit_permissions_allow_live_agent_outside_manifest(
+        self, api_client: TrinityApiClient
+    ):
+        """A live agent outside the manifest (e.g. cornelius) is a valid explicit target."""
+        manifest = """
+name: test-outside
+agents:
+  worker:
+    template: local:default
+permissions:
+  explicit:
+    worker:
+      - cornelius
+"""
+        response = api_client.post(
+            "/api/systems/deploy",
+            json={"manifest": manifest, "dry_run": True},
+        )
+        assert_status(response, 200)
+
+    def test_explicit_permissions_still_reject_nonexistent_target(
+        self, api_client: TrinityApiClient
+    ):
+        """A target that is neither a manifest member nor a live agent still 400s."""
+        manifest = """
+name: test-bogus
+agents:
+  worker:
+    template: local:default
+permissions:
+  explicit:
+    worker:
+      - definitely-not-an-agent-12345
+"""
+        response = api_client.post(
+            "/api/systems/deploy",
+            json={"manifest": manifest, "dry_run": True},
+        )
+        assert_status(response, 400)
+
     def test_list_systems_requires_auth(self, unauthenticated_client: TrinityApiClient):
         """GET /api/systems requires authentication."""
         response = unauthenticated_client.get("/api/systems", auth=False)
