@@ -1,6 +1,7 @@
 # OS files
 .DS_Store
 Thumbs.db
+.cursor/mcp.json
 
 # IDE files
 .vscode/
@@ -38,7 +39,6 @@ wheels/
 
 # uv lockfile (repo uses pyproject.toml for pytest only; empty lockfile is noise)
 uv.lock
-
 # Node
 node_modules/
 npm-debug.log*
