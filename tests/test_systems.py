@@ -1051,7 +1051,12 @@ permissions:
     def test_explicit_permissions_allow_live_agent_outside_manifest(
         self, api_client: TrinityApiClient
     ):
-        """A live agent outside the manifest (e.g. cornelius) is a valid explicit target."""
+        """A live agent outside the manifest (e.g. logix-cornelius) is a valid explicit target.
+
+        The target must be the *deployed* name. Trinity prefixes a manifest's template id with the
+        system name at deploy time, so the knowledge-base agent whose template is `local:cornelius`
+        is deployed as `logix-cornelius`. This test is coupled to that agent existing (R6).
+        """
         manifest = """
 name: test-outside
 agents:
@@ -1060,7 +1065,7 @@ agents:
 permissions:
   explicit:
     worker:
-      - cornelius
+      - logix-cornelius
 """
         response = api_client.post(
             "/api/systems/deploy",
