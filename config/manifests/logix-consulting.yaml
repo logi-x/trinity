@@ -1,12 +1,8 @@
 # Logix Consulting Fleet
-# OPTIONAL greenfield / DR recipe — not a living roster.
-# Day-to-day: onboard agents from github.com/logi-x/logix-* under /home/logix/logix-agents.
-#
-# Templates use GitHub so recreate does not depend on config/agent-templates/*.
-# GitHub refs are source templates only. After deployment, initialize each agent
-# with its own trinity/<agent>/<instance> working branch; do not run on main.
-# Post-deploy (manifest full-mesh is only among agents listed below):
-#   POST /api/agents/{each}/permissions/cornelius
+# LIVING ROSTER - the declared source of truth for fleet topology.
+# Permissions here are applied by scripts/reconcile-permissions.py, NOT by re-deploying
+# this manifest (a redeploy may duplicate running agents - see the migration plan, R1).
+# Topology: hub-and-spoke. See logix-agents/docs/superpowers/specs/2026-07-16-fleet-coordination-topology-design.md
 
 name: logix
 description: Logix Consulting AI Team - governed research, strategy, concepts, and deliverables
@@ -57,15 +53,6 @@ agents:
       memory: 2g
       cpu: "1"
 
-  steward:
-    template: github:logi-x/logix-steward
-    folders:
-      expose: true
-      consume: true
-    resources:
-      memory: 2g
-      cpu: "1"
-
   forge:
     template: github:logi-x/logix-forge
     folders:
@@ -85,30 +72,37 @@ agents:
       cpu: "4"
 
 permissions:
-  preset: full-mesh
+  explicit:
+    # Hub: the only agent that reaches stages. Discovers workers at runtime.
+    atlas:    [scout, sentinel, sage, forge, scribe, experts, logix-cornelius]
+    # Stages: identical rows. Oracles only, never each other.
+    scout:    [logix-cornelius, experts]
+    sentinel: [logix-cornelius, experts]
+    sage:     [logix-cornelius, experts]
+    forge:    [logix-cornelius, experts]
+    scribe:   [logix-cornelius, experts]
+    # Oracles: reach only lower oracles. logix-cornelius reaches nothing.
+    # Members use short names (prefixed at deploy); non-members use their full deployed name.
+    experts:  [logix-cornelius]
 
 auto_start: true
 
 trinity_prompt: |
   You are part of the Logix consulting AI team.
 
-  Team members (agent names from this manifest):
-  - Atlas (logix-atlas): General assistant / orchestrator
-  - Scout (logix-scout): Market research analyst
-  - Sage (logix-sage): Strategic advisor
-  - Scribe (logix-scribe): Content writer
-  - Sentinel (logix-sentinel): Evidence and final-deliverable verifier
-  - Steward (logix-steward): Task ledger, lifecycle, blockers, and approvals
-  - Forge (logix-forge): Product and solution concept architect
-  - Experts (logix-experts): On-demand specialist packs for payments, Saudi compliance, Arabic/RTL, SEO, operations, security, monetization, and accessibility
-  - Cornelius (cornelius): Second brain / institutional memory (when present)
+  The fleet is hub-and-spoke:
+  - Atlas (logix-atlas) is the hub. It sequences work and is the only agent that calls stages.
+  - Stages do a step of the work and return to the hub: Scout (research), Sentinel (verification),
+    Sage (strategy), Forge (concept), Scribe (deliverable). Stages never call each other.
+  - Oracles answer questions and never call back: Cornelius (logix-cornelius) for institutional memory,
+    Experts (logix-experts) for specialist packs.
 
   Collaborate effectively:
-  1. Obtain a stable task ID from Steward before multi-stage work
+  1. Atlas opens an engagement pipeline instance before multi-stage work; its instance_id is the task ID
   2. Follow contracts/ARTIFACT-CONTRACT.md for every handoff
-  3. Prefer specialists for their domain; Atlas handles ad-hoc and multi-domain routing
-  4. Check shared folders and use Trinity MCP to communicate with teammates
+  3. If you need another stage's work, say so in your output and return - do not call it
+  4. Consult Cornelius for known Logix client/org facts before inventing them
   5. Route factual research through Sentinel before strategy uses it
   6. Route final evidence-bearing deliverables through Sentinel before approval
-  7. Ask Cornelius for known Logix client/org facts before inventing them
+  7. Never overwrite a revision - increment rN and set supersedes
   8. Promote only approved facts, decisions, and final artifacts into Cornelius
