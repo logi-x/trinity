@@ -263,9 +263,11 @@ def _process_transcript(req):
 
 # --------------------------------------------------------------- reindex / re-export
 def _refresh(req):
-    """Re-run the real exporter under the persisted scope so newly captured
-    notes/links appear on the orb (#66/#67). Fail-loud: an exporter failure is
-    reported, never masked by a partial in-place patch."""
+    """Re-run the exporter under the persisted scope so newly written vault
+    notes/links appear on the orb (#66/#67). The exporter merges any Brain/
+    markdown missing from graph_enrichments.json before sampling — so a plain
+    vault write (not only orb capture) shows up after refresh. Fail-loud: an
+    exporter failure is reported, never masked by a partial in-place patch."""
     before_nodes, before_edges = graph_counts()
     ok, err = run_export(read_active())
     if not ok:

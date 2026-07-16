@@ -31,7 +31,9 @@
         "Raw/": 90,
         "Projects/": 200,
         "Entities/": 46,
-        "Wiki/Concepts/": 94
+        "Wiki/Concepts/": 94,
+        "Raw/meetings/": 40,
+        "Projects/HoWA/meetings/": 20
       }
     }
   }

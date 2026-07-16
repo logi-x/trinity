@@ -446,10 +446,85 @@ def build_fallback_enrichments():
     return {"nodes": nodes, "edges": edges, "tensions": []}
 
 
+
+def merge_vault_notes_into_enrichments(enrich):
+    """Fold Brain/**/*.md notes missing from enrichments into the node/edge set.
+
+    Brain Orb refresh only re-runs this exporter. When graph_enrichments.json
+    exists it is preferred over a full vault walk — so notes written by agents
+    (or humans) after the last BDG bootstrap never appear until the next
+    full refresh-index. This merge closes that gap on every export/refresh:
+    new markdown is added with folder heuristics + resolvable wikilinks; existing
+    enrichment metadata is left untouched.
+    """
+    nodes = enrich.setdefault("nodes", {})
+    edges = enrich.setdefault("edges", {})
+    title_to_id = {}
+    for nid in list(nodes.keys()):
+        _register_note_keys(title_to_id, nid)
+    if not os.path.isdir(VAULT):
+        return 0
+    added = 0
+    files = []
+    for dp, dn, fn in os.walk(VAULT):
+        dn[:] = [d for d in dn if not d.startswith(".")]
+        for f in fn:
+            if not f.endswith(".md"):
+                continue
+            full = os.path.join(dp, f)
+            nid = os.path.relpath(full, VAULT).replace("\\", "/")
+            files.append((nid, full))
+            _register_note_keys(title_to_id, nid)
+    for nid, full in files:
+        if nid in nodes:
+            continue
+        body = read_text(full, limit=200_000)
+        layer, lifecycle = _layer_lifecycle_for_path(nid)
+        title = os.path.splitext(os.path.basename(nid))[0]
+        m = re.search(r"^#\s+(.+)$", body[:2000], re.M)
+        if m:
+            title = m.group(1).strip()
+        else:
+            tm = re.search(r"^title:\s*[\"']?(.+?)[\"']?\s*$", body[:800], re.M)
+            if tm:
+                title = tm.group(1).strip()
+        nodes[nid] = {
+            "layer": layer,
+            "lifecycle": float(lifecycle),
+            "staleness_score": 0.0,
+            "provenance": "vault-merge",
+            "classification_confidence": 0.5,
+            "title": title,
+        }
+        added += 1
+        for wm in _WIKILINK.finditer(body):
+            tgt = _resolve_wikilink(title_to_id, wm.group(1))
+            if tgt and tgt != nid:
+                edges.setdefault(
+                    f"{nid}||{tgt}",
+                    {"edge_type": "references", "confidence": 0.6,
+                     "source": nid, "target": tgt},
+                )
+    if added:
+        enrich["nodes"] = nodes
+        enrich["edges"] = edges
+        try:
+            os.makedirs(os.path.dirname(ENRICH), exist_ok=True)
+            tmp = ENRICH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(enrich, f)
+            os.replace(tmp, ENRICH)
+        except Exception as exc:
+            print(f"warning: could not persist merged enrichments: {exc}", file=sys.stderr)
+        print(f"merged {added} new vault notes into enrichments", file=sys.stderr)
+    return added
+
+
 def main():
     have_enrich = os.path.exists(ENRICH)
     if have_enrich:
         enrich = read_json(ENRICH)
+        merge_vault_notes_into_enrichments(enrich)
     else:
         print(f"enrichments not found at {ENRICH} — using vault wikilink fallback",
               file=sys.stderr)
@@ -905,16 +980,28 @@ def note_age_days(nid, git_recency):
     path = os.path.join(VAULT, nid)
     if os.path.exists(path):
         head = read_text(path, limit=600)
-        for field in ("updated", "created"):
-            m = re.search(rf"^{field}:\s*([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})", head, re.M)
+        for field in ("updated", "created", "date"):
+            # Accept YAML-quoted or bare ISO dates: updated: "2026-07-15" or updated: 2026-07-15
+            m = re.search(
+                rf"^{field}:\s*[\"\']?([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})[\"\']?",
+                head,
+                re.M,
+            )
             if m and _date(m.group(1)):
                 dates.append(_date(m.group(1)))
+        if not dates:
+            # Fall back to filesystem mtime so brand-new uncommitted notes stay "recent"
+            try:
+                from datetime import datetime as _dt
+                dates.append(_dt.fromtimestamp(os.path.getmtime(path)).date())
+            except Exception:
+                pass
     if not dates:
         return 999
     return max(0, (TODAY - max(dates)).days)
 
 
-# ============================ metrics ============================
+
 def build_metrics(raw_nodes, have_enrich=True):
     """Live counts for the briefing rail. Authoritative phase counts from `status`."""
     ids = list(raw_nodes.keys())
