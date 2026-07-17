@@ -225,6 +225,37 @@ def _get_pull_branch(current_branch: str, home_dir: Path) -> str:
     return "main" if result.returncode == 0 else current_branch
 
 
+def _sync_working_branch_after_pull(current_branch: str, home_dir: Path) -> dict:
+    """Fast-forward a Trinity working branch after it successfully pulls main.
+
+    A PR merged with GitHub's "Create a merge commit" makes the working
+    branch tip an ancestor of ``origin/main``. Pulling main updates the local
+    checkout, but leaves ``origin/trinity/...`` one commit behind unless we
+    publish that fast-forward too. Use a normal push deliberately: it refuses
+    to overwrite a working branch changed by another writer.
+    """
+    if not current_branch.startswith("trinity/"):
+        return {"attempted": False, "updated": False}
+
+    result = subprocess.run(
+        ["git", "push", "origin", f"HEAD:refs/heads/{current_branch}"],
+        capture_output=True,
+        text=True,
+        cwd=str(home_dir),
+        timeout=300,
+    )
+    if result.returncode == 0:
+        return {"attempted": True, "updated": True}
+
+    error = (result.stderr or result.stdout or "git push failed").strip()
+    logger.warning(
+        "Pulled main but could not fast-forward working branch %s: %s",
+        current_branch,
+        error[:500],
+    )
+    return {"attempted": True, "updated": False, "error": error[:2000]}
+
+
 def _sha_file_for_branch(branch: str) -> Path:
     """Path to the last-remote-sha file for a given branch.
 
@@ -1050,12 +1081,19 @@ async def pull_from_github(request: GitPullRequest = GitPullRequest()):
                     # Stash pop failed - likely conflicts with newly pulled changes
                     stash_message = f" (Warning: Could not reapply local changes: {pop_result.stderr.strip()})"
 
+            working_branch_sync = _sync_working_branch_after_pull(
+                current_branch, home_dir
+            )
+            if working_branch_sync["updated"]:
+                stash_message += " (Working branch fast-forwarded)"
+
             return {
                 "success": True,
                 "message": f"Pulled latest changes from origin/{pull_branch}{stash_message}",
                 "strategy": "stash_reapply",
                 "stash_created": stash_created,
-                "output": pull_result.stdout
+                "output": pull_result.stdout,
+                "working_branch_sync": working_branch_sync,
             }
 
         else:  # "clean" strategy (default)
@@ -1103,12 +1141,21 @@ async def pull_from_github(request: GitPullRequest = GitPullRequest()):
                     branch=pull_branch,
                 )
 
+            working_branch_sync = _sync_working_branch_after_pull(
+                current_branch, home_dir
+            )
+            sync_message = (
+                " and fast-forwarded the working branch"
+                if working_branch_sync["updated"]
+                else ""
+            )
             return {
                 "success": True,
-                "message": f"Pulled {commits_behind} commit(s) from origin/{pull_branch}",
+                "message": f"Pulled {commits_behind} commit(s) from origin/{pull_branch}{sync_message}",
                 "strategy": "clean",
                 "commits_behind": commits_behind,
-                "output": pull_result.stdout
+                "output": pull_result.stdout,
+                "working_branch_sync": working_branch_sync,
             }
 
     except subprocess.TimeoutExpired:

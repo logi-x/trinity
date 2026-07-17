@@ -71,6 +71,7 @@ from agent_server.routers.git import (  # noqa: E402
     _compute_ahead_behind,
     _get_pull_branch,
     _dual_ahead_behind_payload,
+    _sync_working_branch_after_pull,
 )
 
 
@@ -213,3 +214,38 @@ class TestDualAheadBehindPayload:
         _run(["git", "checkout", "-b", "trinity/alpha/deadbeef"], local)
         assert _get_pull_branch("trinity/alpha/deadbeef", local) == "main"
         assert _get_pull_branch("main", local) == "main"
+
+
+class TestSyncWorkingBranchAfterPull:
+    """A merge-commit PR pull must also fast-forward the working branch."""
+
+    def test_advances_working_branch_after_pulling_merged_pr(self, repos):
+        local, remote = repos
+        branch = "trinity/alpha/abc123"
+
+        _run(["git", "checkout", "-b", branch], local)
+        (local / "agent-change.txt").write_text("from the agent")
+        _run(["git", "add", "."], local)
+        _run(["git", "commit", "-m", "agent change"], local)
+        _run(["git", "push", "-u", "origin", branch], local)
+
+        # GitHub's "Create a merge commit" keeps the agent commit as an
+        # ancestor of main, which lets the agent pull main as a fast-forward.
+        maintainer = local.parent / "maintainer"
+        _run(["git", "clone", str(remote), str(maintainer)], local.parent)
+        _run(["git", "config", "user.email", "maintainer@test.com"], maintainer)
+        _run(["git", "config", "user.name", "Maintainer"], maintainer)
+        _run(["git", "merge", "--no-ff", f"origin/{branch}", "-m", "Merge agent PR"], maintainer)
+        _run(["git", "push", "origin", "main"], maintainer)
+
+        _run(["git", "fetch", "origin"], local)
+        pulled = _run(["git", "pull", "--ff-only", "origin", "main"], local)
+        assert pulled.returncode == 0, pulled.stderr
+
+        result = _sync_working_branch_after_pull(branch, local)
+        assert result["attempted"] is True
+        assert result["updated"] is True
+
+        working_tip = _run(["git", "rev-parse", f"origin/{branch}"], local).stdout.strip()
+        main_tip = _run(["git", "rev-parse", "origin/main"], local).stdout.strip()
+        assert working_tip == main_tip
