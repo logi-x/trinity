@@ -178,7 +178,7 @@ ModuleNotFoundError: No module named '<some_package>'
 Cause: backend source is bind-mounted from your working tree, but the
 **Python environment is baked into the platform image at build time**.
 After a `git pull` that adds a new dependency to
-`docker/backend/Dockerfile`, `docker/scheduler/requirements.txt`,
+`docker/backend/requirements.txt`, `docker/scheduler/requirements.txt`,
 `src/frontend/package.json`, or `src/mcp-server/package.json`, the new
 source runs against the old image's environment and the import fails.
 Compose keeps respawning the crash-looping worker, so port 8000 never

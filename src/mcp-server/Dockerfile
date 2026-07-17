@@ -1,7 +1,7 @@
 # Trinity MCP Server
 # Provides MCP interface for agent orchestration
 
-FROM node:22-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ COPY src ./src
 RUN npm install && npm run build && npm prune --production
 
 # Run as non-root (CSO hardening, issue #874).
-# node:22-alpine ships a built-in `node` user at UID 1000.
+# node:26-alpine ships a built-in `node` user at UID 1000.
 RUN chown -R node:node /app
 USER node
 

@@ -1,0 +1,69 @@
+# Trinity Backend Service Dependencies
+# Installed by docker/backend/Dockerfile via: pip install -r requirements.txt
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.37.0
+pydantic[email]>=2.10.4,<3
+python-multipart==0.0.20
+websockets==14.1
+aiofiles==24.1.0
+
+# Auth / crypto
+# cryptography is pinned explicitly: the 49.x line's bundled OpenSSL triggers a
+# SIGILL (illegal instruction) when loaded in the same process as grpcio's
+# BoringSSL (pulled in transitively by the OTLP gRPC exporter) on
+# python:3.13-slim. Each imports fine alone; loaded together they crash on
+# `import main`. 44.x is the last compatible line — verified by booting the
+# backend end-to-end. Do not unpin without re-verifying startup.
+python-jose[cryptography]==3.3.0
+cryptography==44.0.1
+passlib[bcrypt]==1.7.4
+# passlib 1.7.4 reads bcrypt.__about__, removed in bcrypt 4.1+ — keep 4.0.x.
+bcrypt==4.0.1
+pyotp==2.9.0
+
+# Data / storage
+redis==5.2.1
+# 2.0.40+ required for CPython 3.14 (older releases raise TypeError in
+# make_union_type when ORM models use modern typing — breaks payments_py/a2a import).
+sqlalchemy==2.0.51
+alembic==1.18.4
+# 2.9.11+ required for CPython 3.14 wheels (older pins fall back to source builds
+# and fail without pg_config / libpq-dev in the slim image).
+psycopg2-binary==2.9.12
+# 6.0.3+ required for CPython 3.14 wheels.
+pyyaml==6.0.3
+
+# HTTP / Docker
+httpx==0.28.1
+aiohttp
+docker==7.1.0
+
+# Scheduling
+apscheduler==3.11.0
+croniter==5.0.1
+pytz==2024.2
+
+# Integrations
+payments-py==1.2.1
+# 11.3.0+ required for CPython 3.14 wheels.
+Pillow==11.3.0
+google-genai==1.63.0
+slack_sdk[socket-mode]==3.41.0
+slackify-markdown
+twilio==9.10.5
+
+# Observability
+tenacity==9.0.0
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-httpx==0.50b0
+opentelemetry-instrumentation-redis==0.50b0
+
+# System / media
+psutil==6.1.1
+python-magic==0.4.27
+audioop-lts; python_version >= '3.13'

@@ -510,6 +510,24 @@ def check_agent_auth_token_env_matches(container, agent_name: str) -> bool:
     return env_dict.get("TRINITY_AGENT_AUTH_TOKEN") == derive_agent_token(agent_name)
 
 
+def check_agent_name_env_matches(container, agent_name: str) -> bool:
+    """Verify ``AGENT_NAME`` (and the trinity label) match the agent's CURRENT name.
+
+    Rename updates the DB + Docker container name, but recreate used to copy the
+    old ``AGENT_NAME`` env verbatim — leaving heartbeats posting to the old path
+    (403: MCP key is bound to the new name). Returns ``False`` → recreate when
+    the env or label is missing/stale. Loop-safe: recreate writes exactly
+    ``agent_name`` into both fields.
+    """
+    env_list = container.attrs.get("Config", {}).get("Env", [])
+    env_dict = {e.split("=", 1)[0]: e.split("=", 1)[1] for e in env_list if "=" in e}
+    labels = container.attrs.get("Config", {}).get("Labels", {}) or {}
+    return (
+        env_dict.get("AGENT_NAME") == agent_name
+        and labels.get("trinity.agent-name") == agent_name
+    )
+
+
 def needs_per_agent_pat_injection(agent_name: str) -> bool:
     """#1264: True when the agent has a **per-agent** GitHub PAT configured AND
     git sync — i.e. the container SHOULD carry that token.

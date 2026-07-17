@@ -58,7 +58,7 @@ export function createReportTools(client: TrinityClient, requireApiKey: boolean)
           "e.g. 'recon.weekly_summary', 'prospector.leads_found', 'ops.daily_health', 'custom.notes'."
         ),
         title: z.string().max(300).describe("Short human-readable title (required, max 300 chars)."),
-        payload: z.record(z.unknown()).describe(
+        payload: z.record(z.string(), z.unknown()).describe(
           "Arbitrary JSON body of the report (max 256 KB serialized)."
         ),
         display_hint: z.enum(["table", "kpi", "markdown", "timeline", "json"]).optional()

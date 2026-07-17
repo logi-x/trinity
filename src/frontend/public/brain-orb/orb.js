@@ -95,7 +95,58 @@ const R = 120;                  // sphere radius
 
 /* ============================ scene ============================ */
 const canvas = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+
+// Vite HMR / SPA remounts can re-run this module without freeing the previous
+ // GPU context. Chrome's per-process WebGL budget is small (~8–16); leaking
+ // contexts ends with GL_VENDOR=Disabled / BindToCurrentSequence failed even
+ // when hardware acceleration is still "on".
+try {
+  if (window.__trinityOrbRenderer) {
+    window.__trinityOrbRenderer.dispose();
+    window.__trinityOrbRenderer.forceContextLoss?.();
+    window.__trinityOrbRenderer = null;
+  }
+} catch (_) {}
+
+function createOrbRenderer() {
+  // Prefer cheaper contexts first when recovering from GPU pressure; fall back
+  // to the original antialiased setup when the GPU is healthy.
+  const attempts = [
+    { antialias: false, alpha: true, powerPreference: 'low-power', failIfMajorPerformanceCaveat: false },
+    { antialias: false, alpha: true, powerPreference: 'default', failIfMajorPerformanceCaveat: false },
+    { antialias: true,  alpha: true, powerPreference: 'default', failIfMajorPerformanceCaveat: false },
+  ];
+  let lastErr = null;
+  for (const params of attempts) {
+    try {
+      const r = new THREE.WebGLRenderer({ canvas, ...params });
+      return r;
+    } catch (err) {
+      lastErr = err;
+      console.warn('[brain-orb] WebGL attempt failed', params, err);
+    }
+  }
+  throw lastErr || new Error('WebGL unavailable');
+}
+
+let renderer;
+try {
+  renderer = createOrbRenderer();
+  window.__trinityOrbRenderer = renderer;
+} catch (err) {
+  const ld = document.getElementById('loading');
+  if (ld) {
+    ld.innerHTML =
+      'WebGL failed to start.<br>' +
+      '<span style="opacity:.75;font-size:12px;line-height:1.5;display:inline-block;margin-top:8px;max-width:28rem">' +
+      'Hardware acceleration can be on while WebGL is still blocked (GPU process crash, too many contexts from terminals/tabs). ' +
+      'Try: close other Trinity tabs → open <code>chrome://gpu</code> and confirm WebGL is green → fully quit and reopen the browser → hard-reload this page.' +
+      '</span>';
+    ld.title = String((err && err.message) || err);
+  }
+  console.error('[brain-orb] WebGL context failed:', err);
+  throw err;
+}
 renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));   // #60: cap retina 2x→1.5x for GPU headroom inside the Trinity SPA (the standalone had the whole thread; here the orb shares it) — halves fill jank on hi-DPR displays
 renderer.setSize(innerWidth, innerHeight);
 

@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
@@ -29,51 +29,10 @@ ENV VERSION=${VERSION} \
     GIT_BRANCH=${GIT_BRANCH} \
     BUILD_DATE=${BUILD_DATE}
 
-# cryptography is pinned explicitly: the 49.x line's bundled OpenSSL triggers a
-# SIGILL (illegal instruction) when loaded in the same process as grpcio's
-# BoringSSL (pulled in transitively by the OTLP gRPC exporter) on
-# python:3.13-slim. Each imports fine alone; loaded together they crash on
-# `import main`. 44.x is the last compatible line — verified by booting the
-# backend end-to-end. Do not unpin without re-verifying startup.
-RUN pip install --no-cache-dir \
-    fastapi==0.115.6 \
-    uvicorn[standard]==0.37.0 \
-    "pydantic[email]>=2.10.4,<3" \
-    python-jose[cryptography]==3.3.0 \
-    cryptography==44.0.1 \
-    passlib[bcrypt]==1.7.4 \
-    bcrypt==4.2.1 \
-    python-multipart==0.0.20 \
-    websockets==14.1 \
-    redis==5.2.1 \
-    httpx==0.28.1 \
-    pyyaml==6.0.2 \
-    sqlalchemy==2.0.36 \
-    alembic==1.18.4 \
-    psycopg2-binary==2.9.10 \
-    docker==7.1.0 \
-    aiofiles==24.1.0 \
-    apscheduler==3.11.0 \
-    croniter==5.0.1 \
-    pytz==2024.2 \
-    psutil==6.1.1 \
-    payments-py==1.2.1 \
-    Pillow==11.1.0 \
-    google-genai==1.63.0 \
-    "slack_sdk[socket-mode]==3.41.0" \
-    aiohttp \
-    slackify-markdown \
-    tenacity==9.0.0 \
-    opentelemetry-api==1.29.0 \
-    opentelemetry-sdk==1.29.0 \
-    opentelemetry-exporter-otlp==1.29.0 \
-    opentelemetry-instrumentation-fastapi==0.50b0 \
-    opentelemetry-instrumentation-httpx==0.50b0 \
-    opentelemetry-instrumentation-redis==0.50b0 \
-    python-magic==0.4.27 \
-    pyotp==2.9.0 \
-    twilio==9.10.5 \
-    "audioop-lts; python_version >= '3.13'"
+# Python deps (pins + cryptography SIGILL note live in requirements.txt).
+# Copied before app sources so dependency changes alone can reuse the layer.
+COPY docker/backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all top-level backend modules. Globbed (not enumerated) so a new
 # top-level module can never be silently dropped from the prod image again

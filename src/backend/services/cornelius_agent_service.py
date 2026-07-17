@@ -42,7 +42,7 @@ from redis_breaker_util import get_breaker_redis
 
 logger = logging.getLogger(__name__)
 
-CORNELIUS_AGENT_NAME = "cornelius"
+CORNELIUS_AGENT_NAME = "logix-cornelius"
 CORNELIUS_TEMPLATE = "local:cornelius"
 CORNELIUS_TYPE = "knowledge-base"
 CORNELIUS_OWNER = "admin"  # seeded under the admin account, like the system agent

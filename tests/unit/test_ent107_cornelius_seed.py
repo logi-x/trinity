@@ -190,7 +190,7 @@ def test_provision_builds_local_template_config(monkeypatch):
     asyncio.run(svc._provision(admin))
 
     assert captured["config"].template == "local:cornelius"
-    assert captured["config"].name == "cornelius"
+    assert captured["config"].name == "logix-cornelius"
     assert captured["request"] is None
     assert captured["user"].username == "admin"
 

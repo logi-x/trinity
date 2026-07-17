@@ -17,7 +17,8 @@ pytz>=2024.1
 
 # PostgreSQL driver (#300) — used only when DATABASE_URL is a postgresql:// URL;
 # the scheduler defaults to the shared SQLite file when unset.
-psycopg2-binary>=2.9.0
+# 2.9.11+ required for CPython 3.14 wheels (source build needs pg_config).
+psycopg2-binary>=2.9.11
 
 # Testing (dev dependencies)
 pytest>=8.0.0

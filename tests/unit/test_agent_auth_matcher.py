@@ -59,3 +59,39 @@ def test_loop_safe_after_recreate_inject():
     # needs_recreation converges in one pass (no infinite recreate loop).
     c = _with_token(derive_agent_token("new-name"))
     assert check_agent_auth_token_env_matches(c, "new-name") is True
+
+
+# ---------------------------------------------------------------------------
+# check_agent_name_env_matches (rename leaves stale AGENT_NAME)
+# ---------------------------------------------------------------------------
+
+from services.agent_service.helpers import check_agent_name_env_matches
+
+
+class _NamedContainer:
+    def __init__(self, env_list, labels=None):
+        self.attrs = {"Config": {"Env": env_list, "Labels": labels or {}}}
+
+
+def test_agent_name_env_and_label_match():
+    c = _NamedContainer(
+        ["AGENT_NAME=logix-cornelius"],
+        {"trinity.agent-name": "logix-cornelius"},
+    )
+    assert check_agent_name_env_matches(c, "logix-cornelius") is True
+
+
+def test_stale_agent_name_env_triggers_recreate():
+    c = _NamedContainer(
+        ["AGENT_NAME=cornelius"],
+        {"trinity.agent-name": "cornelius"},
+    )
+    assert check_agent_name_env_matches(c, "logix-cornelius") is False
+
+
+def test_mismatched_label_triggers_recreate():
+    c = _NamedContainer(
+        ["AGENT_NAME=logix-cornelius"],
+        {"trinity.agent-name": "cornelius"},
+    )
+    assert check_agent_name_env_matches(c, "logix-cornelius") is False
