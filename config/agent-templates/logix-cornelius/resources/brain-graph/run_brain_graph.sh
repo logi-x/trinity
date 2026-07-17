@@ -11,15 +11,8 @@
 #   ./run_brain_graph.sh coherence [--days 7] [--tensions] [--json]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$SCRIPT_DIR/../local-brain-search/venv"
-
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Error: Python venv not found at $VENV_DIR" >&2
-    echo "Set up local-brain-search first." >&2
-    exit 1
-fi
-
-# Activate venv and run CLI
-source "$VENV_DIR/bin/activate"
+LBS_DIR="$SCRIPT_DIR/../local-brain-search"
+bash "$LBS_DIR/ensure_venv.sh"
+source "$LBS_DIR/venv/bin/activate"
 cd "$SCRIPT_DIR"
 python cli.py "$@"

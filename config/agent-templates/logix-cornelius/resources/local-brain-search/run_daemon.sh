@@ -27,6 +27,7 @@ case "${1:-status}" in
             exit 0
         fi
         echo "Starting brain search daemon on port $PORT..."
+        bash "$SCRIPT_DIR/ensure_venv.sh"
         nohup "$PYTHON" "$SCRIPT_DIR/daemon.py" > "$LOG_FILE" 2>&1 &
         echo $! > "$PID_FILE"
         # Wait for it to be ready

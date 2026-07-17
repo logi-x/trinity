@@ -130,4 +130,5 @@ print(f\"Mode: {mode.upper()} (via daemon)\")
 fi
 
 # Fallback: direct Python (original behavior)
+bash "$SCRIPT_DIR/ensure_venv.sh"
 "$SCRIPT_DIR/venv/bin/python" "$SCRIPT_DIR/search.py" "$@"
