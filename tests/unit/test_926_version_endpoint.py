@@ -120,6 +120,18 @@ def test_version_payload_empty_version_env_falls_back_to_file(monkeypatch):
     assert payload["version"] != "unknown"  # file present in repo
 
 
+def test_version_payload_unknown_sentinel_env_falls_back_to_file(monkeypatch):
+    """compose `VERSION:-unknown` must not shadow /app/VERSION — otherwise
+    the NavBar shows 'vunknown' whenever start.sh didn't stamp build args."""
+    monkeypatch.setenv("VERSION", "unknown")
+
+    build = _load_builder()
+    payload = build(voice_enabled=False, edition="oss", enterprise_features=[])
+
+    assert payload["version"] != "unknown"
+    assert payload["version"]  # e.g. curated semver from repo VERSION file
+
+
 def test_version_payload_preserves_existing_fields(monkeypatch):
     """Pre-#926 keys (version, platform, components, runtimes, voice_enabled)
     must still be present so existing callers don't break."""

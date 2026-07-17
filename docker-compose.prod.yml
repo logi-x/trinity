@@ -33,6 +33,14 @@ services:
     environment:
       - SECRET_KEY=${SECRET_KEY}
       - "ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env (admin login + MCP auth)}"
+      # #926 provenance at runtime (mirrors docker-compose.yml) — start.sh /
+      # deploy workflows export these before compose up.
+      - VERSION=${VERSION:-}
+      - GIT_COMMIT=${GIT_COMMIT:-unknown}
+      - GIT_COMMIT_SUBJECT=${GIT_COMMIT_SUBJECT:-unknown}
+      - GIT_COMMIT_TIMESTAMP=${GIT_COMMIT_TIMESTAMP:-unknown}
+      - GIT_BRANCH=${GIT_BRANCH:-unknown}
+      - BUILD_DATE=${BUILD_DATE:-unknown}
       # REDIS_URL embeds the `backend` ACL user — see docker-compose redis service.
       - "REDIS_URL=redis://backend:${REDIS_BACKEND_PASSWORD:?REDIS_BACKEND_PASSWORD must be set in .env}@redis:6379"
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}

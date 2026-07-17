@@ -22,6 +22,16 @@ services:
       - SECRET_KEY=${SECRET_KEY:-}  # Required - generate with: openssl rand -hex 32
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}  # Required - set a strong password
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      # #926 provenance at runtime: start.sh exports these before `compose up`.
+      # Without them the image still has build-ARG defaults ("unknown"); with
+      # them a restart picks up git metadata without rebuilding. Empty VERSION
+      # falls through to the mounted ./VERSION file (see main._build_version_payload).
+      - VERSION=${VERSION:-}
+      - GIT_COMMIT=${GIT_COMMIT:-unknown}
+      - GIT_COMMIT_SUBJECT=${GIT_COMMIT_SUBJECT:-unknown}
+      - GIT_COMMIT_TIMESTAMP=${GIT_COMMIT_TIMESTAMP:-unknown}
+      - GIT_BRANCH=${GIT_BRANCH:-unknown}
+      - BUILD_DATE=${BUILD_DATE:-unknown}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       # REDIS_URL embeds the `backend` ACL user — see docker-compose redis service.

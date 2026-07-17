@@ -1226,7 +1226,13 @@ def _build_version_payload(
     #   3. "unknown" — neither present.
     # Env-first means dev (bind-mount) and prod (build-arg) agree for the
     # same commit instead of diverging on the file-mount being absent.
-    version = os.getenv("VERSION") or None
+    #
+    # Treat the compose default `VERSION:-unknown` as unset: otherwise a
+    # literal env="unknown" (truthy) shadows the mounted VERSION file and
+    # the UI shows "vunknown" even when /app/VERSION is present.
+    version = (os.getenv("VERSION") or "").strip() or None
+    if version == "unknown":
+        version = None
     if not version:
         version_paths = [
             Path("/app/VERSION"),  # In container (mounted)
