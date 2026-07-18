@@ -18,13 +18,34 @@ One command covers the correct nightly pipeline (FAISS → coherence+tensions �
 | `--full` | Also run `bootstrap --force` before coherence (wipes then re-detects tensions) |
 | `--skip-index` / `--skip-coherence` / `--skip-export` | Omit a stage |
 
-### Trinity schedule prompt (short)
+### Slash command (on-demand)
 
 ```
-Run ./resources/run_vault_maintenance.sh --commit-brain in the foreground and wait until it finishes (up to ~60 minutes). Do not background it. Reply with the script's summary block (synced, notes_before/after) and any errors verbatim. This schedule is the approval gate — no extra confirmation.
+/vault-maintenance
+/vault-maintenance --commit-brain
+/vault-maintenance --full --commit-brain
 ```
 
-Weekly (or when the Orb shows stale/renamed paths), use `--full` instead.
+Defined at `.claude/commands/vault-maintenance.md` (declared in `template.yaml` → `commands`).
+
+### Trinity schedule prompt (nightly)
+
+Paste as the Scheduled Task message (or keep the live DB copy in sync):
+
+```
+Scheduled nightly vault maintenance (unattended — no approval gates apply; this schedule IS the approval). Scope: Brain/ git sync + Orb-safe pipeline (FAISS → coherence+tensions → Orb export). Do NOT use --full (that wipes tensions).
+
+1. Run `/vault-maintenance --commit-brain` in the FOREGROUND and wait until it finishes before ending your turn. Do not background it; do not end early. It can take ~20–45 minutes; your execution window is 60 minutes.
+   Equivalent shell: `./resources/run_vault_maintenance.sh --commit-brain`
+2. Do NOT run `/refresh-index`, `bootstrap`, `bootstrap --force`, or invent alternate steps. The command already:
+   - If Brain/ is dirty: commits ONLY Brain/ with message `chore(vault): nightly sync <YYYY-MM-DD>` and pushes the current branch (no force, never amend). If clean, skips.
+   - Stops if an index rebuild is already running.
+   - Rebuilds FAISS, runs `coherence --tensions` (does not wipe tensions), exports Orb `data.json`, appends ONE line to Brain/Log.md (that line is not committed; it rides along in a later sync).
+3. Reply with the script's summary block verbatim: `synced` / skipped, `notes_before` / `notes_after`, and any errors.
+
+Weekly or after renames / ghost Orb paths (manual or a separate schedule): `/vault-maintenance --full --commit-brain`.
+```
+
 
 ### Pipeline reference
 
