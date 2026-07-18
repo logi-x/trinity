@@ -311,6 +311,42 @@ export interface OperatorQueueListResponse {
   count: number;
 }
 
+// Coordination Runs — durable cross-agent business-work correlation
+
+export type CoordinationRunStatus =
+  | "active"
+  | "waiting"
+  | "blocked"
+  | "completed"
+  | "cancelled";
+
+export type CoordinationResourceType = "execution" | "operator_queue";
+
+export interface CoordinationRunResource {
+  run_id: string;
+  resource_type: CoordinationResourceType;
+  resource_id: string;
+  role: string;
+  created_at: string;
+  notified_status?: string | null;
+  notified_at?: string | null;
+}
+
+export interface CoordinationRun {
+  id: string;
+  owner_agent: string;
+  root_execution_id?: string | null;
+  outcome: string;
+  status: CoordinationRunStatus;
+  context?: Record<string, unknown> | null;
+  version: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  closed_at?: string | null;
+  resources?: CoordinationRunResource[];
+}
+
 // Agent compatibility validation (#668)
 
 export interface CompatibilityCheck {

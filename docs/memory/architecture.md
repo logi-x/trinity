@@ -248,11 +248,13 @@ Channel DB modules: `db/slack_channels.py` (workspace connections, channel-agent
 
 **Collaboration Dashboard** (`views/AgentCollaboration.vue`, `components/AgentNode.vue`, `stores/collaborations.js`): Vue Flow node graph of agent-to-agent communication — draggable status-colored nodes, edges animated 3s on collaboration, real-time activity feed, replay with time-range filtering, localStorage node positions. Detection: the backend chat endpoint accepts `X-Source-Agent` and broadcasts `agent_collaboration` WS events; `activity_service` broadcasts `agent_activity` (`activity_type`: chat_start/chat_end/tool_call/schedule_start/schedule_end/agent_collaboration; `activity_state`: started/completed/failed/cancelled — a user-cancelled terminal is recorded as `cancelled`, distinct from `failed`, #1332).
 
+**Coordination runs:** `coordination_runs` + `coordination_run_resources` provide a thin durable correlation envelope for business work spanning agents, executions, and operator decisions. The platform owns only generic lifecycle (`active|waiting|blocked|completed|cancelled`), an optimistic `version`, opaque JSON `context`, and idempotent resource links. Existing execution/operator-queue terminal writes claim a link once per terminal status and emit persisted `coordination.execution.terminal` / `coordination.operator_queue.terminal` events through the existing event-subscription service; an owner agent may self-subscribe for event-driven re-entry. This is an explicit complement to Invariant #8, not an exception to it: Trinity never interprets `context`, advances stages, evaluates joins, or executes an agent-defined DAG. Full flow: [coordination-runs.md](feature-flows/coordination-runs.md).
+
 ### MCP Server (`src/mcp-server/`)
 
 FastMCP, Streamable HTTP transport, port 8080. API-key auth via `Authorization: Bearer` header; FastMCP `authenticate` callback validates keys against the backend and stores an `McpAuthContext` in session: `{userId, userEmail, keyName, agentName?, scope: "user"|"agent", mcpApiKey}`. Agent-to-agent collaboration uses agent-scoped keys for access control.
 
-**Tools** across 22 tool modules (`src/tools/`):
+**Tools** across the modules in `src/tools/`:
 
 | Module | Tools | Description |
 |--------|-------|-------------|
@@ -278,6 +280,7 @@ FastMCP, Streamable HTTP transport, port 8080. API-key auth via `Authorization: 
 | `reports.ts` (1) | `report` | Publish a structured report; agent resolved from auth context (self-only), backend self-gates the path agent (#918) |
 | `voip.ts` (1) | `call_user` | Outbound phone call via Twilio Media Streams; server-gated + rate-limited (VOIP-001, #1056) |
 | `operator_queue.ts` (3) | `list_operator_queue`, `get_operator_queue_item`, `respond_to_operator_queue` | Read the Operating Room queue (broad or `agent_name`-scoped) and **resolve** a pending item — answer / approve / deny via `POST /{id}/respond`. The respond tool resolves the item's `agent_name`, then applies the same MCP-layer gate before writing (non-`pending` → structured error). Agent-scoped keys gated to `{self} ∪ permitted`. `cancel` deferred. (OPS-001, #1101 read / #1104 respond) |
+| `coordination_runs.ts` (5) | `create_coordination_run`, `list_coordination_runs`, `get_coordination_run`, `update_coordination_run`, `attach_coordination_resource` | Durable business-work correlation over existing execution/operator-queue records. Agent-scoped keys default to self; permitted siblings are read-only; updates use optimistic `expected_version`. No pipeline interpretation or DAG execution. |
 | `git.ts` (6) | `get_git_status`, `git_sync`, `get_git_log`, `git_pull`, `get_git_sync_state`, `reset_to_main_preserve_state` | Direct, deterministic (non-LLM) git operations — bypass `chat_with_agent` for status/sync/log/pull/sync-state and the destructive `reset_to_main_preserve_state` recovery. Conflicts stay LLM-mediated: a 409 surfaces `X-Conflict-Type`/`X-Conflict-Class` verbatim + a `chat_with_agent` hint. Mutating ops (`git_sync`/`reset`) are `OwnedAgentByName` (owner-only; a shared key gets read+pull only); agent-scoped keys gated to `{self} ∪ permitted` at the MCP layer. Each call mints a `requestId` it stamps on its `mcp_operation` audit row AND forwards as `X-Request-ID`, so the paired backend `git_operation` row joins via `GET /api/audit-log?request_id=` (#905) |
 
 ### Vector Log Aggregator (`config/vector.yaml`)
@@ -1487,6 +1490,34 @@ CREATE TABLE agent_events (
     payload TEXT,                         -- JSON
     subscriptions_triggered INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
+);
+```
+
+**coordination_runs / coordination_run_resources** (cross-agent work correlation):
+```sql
+CREATE TABLE coordination_runs (
+    id TEXT PRIMARY KEY,                    -- cr_...
+    owner_agent TEXT NOT NULL,
+    root_execution_id TEXT,
+    outcome TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',  -- generic lifecycle only
+    context TEXT,                           -- opaque JSON, interpreted by owner agent
+    version INTEGER NOT NULL DEFAULT 1,     -- optimistic CAS
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+);
+CREATE TABLE coordination_run_resources (
+    run_id TEXT NOT NULL,
+    resource_type TEXT NOT NULL,            -- execution | operator_queue
+    resource_id TEXT NOT NULL,
+    role TEXT NOT NULL,                     -- opaque agent-defined role
+    created_at TEXT NOT NULL,
+    notified_status TEXT,
+    notified_at TEXT,
+    PRIMARY KEY (run_id, resource_type, resource_id),
+    FOREIGN KEY (run_id) REFERENCES coordination_runs(id) ON DELETE CASCADE
 );
 ```
 

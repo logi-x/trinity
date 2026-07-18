@@ -21,6 +21,7 @@ Redis is still used for:
 - Sessions/cache
 """
 
+import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
@@ -142,6 +143,40 @@ from db.compatibility import CompatibilityOperations
 from db.sync_state import SyncStateOperations
 from db.idempotency import IdempotencyOperations
 from db.loops import LoopOperations
+from db.coordination_runs import CoordinationRunOperations
+
+
+_EXECUTION_TERMINAL_STATUSES = {"success", "failed", "cancelled", "skipped"}
+
+
+def _schedule_coordination_terminal(
+    store,
+    resource_type: str,
+    resource_id: str,
+    terminal_status,
+) -> None:
+    """Persist correlation events, then schedule best-effort delivery."""
+    normalized = getattr(terminal_status, "value", terminal_status)
+    from services.coordination_run_service import (
+        dispatch_terminal_events,
+        persist_resource_terminal,
+    )
+
+    deliveries = persist_resource_terminal(
+        store, resource_type, resource_id, str(normalized)
+    )
+    if not deliveries:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(
+            dispatch_terminal_events(
+                deliveries, wait_for_subscriptions=True
+            )
+        )
+    else:
+        loop.create_task(dispatch_terminal_events(deliveries))
 
 
 def init_database():
@@ -351,6 +386,7 @@ class DatabaseManager:
         self._nevermined_ops = NeverminedOperations()
         self._operator_queue_ops = OperatorQueueOperations()
         self._event_subscription_ops = EventSubscriptionOperations()
+        self._coordination_run_ops = CoordinationRunOperations()
         self._telegram_channel_ops = TelegramChannelOperations()
         self._whatsapp_channel_ops = WhatsAppChannelOperations()
         self._voip_ops = VoipOperations()
@@ -958,9 +994,15 @@ class DatabaseManager:
     def update_execution_status(self, execution_id: str, status: str, response: str = None, error: str = None,
                                 context_used: int = None, context_max: int = None, cost: float = None, tool_calls: str = None, execution_log: str = None,
                                 claude_session_id: str = None, compact_metadata: str = None, retry_count: int = None):
-        return self._schedule_ops.update_execution_status(execution_id, status, response, error,
-                                                          context_used, context_max, cost, tool_calls, execution_log, claude_session_id,
-                                                          compact_metadata, retry_count)
+        won = self._schedule_ops.update_execution_status(execution_id, status, response, error,
+                                                         context_used, context_max, cost, tool_calls, execution_log, claude_session_id,
+                                                         compact_metadata, retry_count)
+        normalized = getattr(status, "value", status)
+        if won and execution_id and normalized in _EXECUTION_TERMINAL_STATUSES:
+            _schedule_coordination_terminal(
+                self, "execution", execution_id, normalized
+            )
+        return won
 
     def mark_execution_dispatched(self, execution_id: str, async_dispatch: bool = False) -> bool:
         return self._schedule_ops.mark_execution_dispatched(execution_id, async_dispatch)
@@ -2150,15 +2192,32 @@ class DatabaseManager:
 
     def respond_to_operator_queue_item(self, item_id, response, response_text,
                                         responded_by_id, responded_by_email):
-        return self._operator_queue_ops.respond_to_item(
+        item = self._operator_queue_ops.respond_to_item(
             item_id, response, response_text, responded_by_id, responded_by_email
         )
+        if item and not item.get("_status_conflict") and item.get("status") == "responded":
+            _schedule_coordination_terminal(
+                self, "operator_queue", item_id, "responded"
+            )
+        return item
 
     def cancel_operator_queue_item(self, item_id):
-        return self._operator_queue_ops.cancel_item(item_id)
+        item = self._operator_queue_ops.cancel_item(item_id)
+        if item and item.get("status") == "cancelled":
+            _schedule_coordination_terminal(
+                self, "operator_queue", item_id, "cancelled"
+            )
+        return item
 
     def bulk_cancel_operator_queue_items(self, ids, accessible_agent_names=None):
-        return self._operator_queue_ops.bulk_cancel_items(ids, accessible_agent_names)
+        cancelled_ids = self._operator_queue_ops.bulk_cancel_item_ids(
+            ids, accessible_agent_names
+        )
+        for item_id in cancelled_ids:
+            _schedule_coordination_terminal(
+                self, "operator_queue", item_id, "cancelled"
+            )
+        return len(cancelled_ids)
 
     def clear_resolved_operator_queue_items(self, agent_name=None,
                                             accessible_agent_names=None):
@@ -2175,7 +2234,12 @@ class DatabaseManager:
         return self._operator_queue_ops.mark_acknowledged(item_id)
 
     def mark_operator_queue_expired(self):
-        return self._operator_queue_ops.mark_expired()
+        expired_ids = self._operator_queue_ops.mark_expired_item_ids()
+        for item_id in expired_ids:
+            _schedule_coordination_terminal(
+                self, "operator_queue", item_id, "expired"
+            )
+        return len(expired_ids)
 
     def get_operator_queue_stats(self, **kwargs):
         return self._operator_queue_ops.get_stats(**kwargs)
@@ -2216,6 +2280,44 @@ class DatabaseManager:
 
     def list_agent_events(self, source_agent=None, event_type=None, limit=50):
         return self._event_subscription_ops.list_events(source_agent, event_type, limit)
+
+    # =========================================================================
+    # Coordination Runs
+    # =========================================================================
+
+    def create_coordination_run(self, **kwargs):
+        return self._coordination_run_ops.create_run(**kwargs)
+
+    def get_coordination_run(self, run_id):
+        return self._coordination_run_ops.get_run(run_id)
+
+    def list_coordination_runs(self, owner_agent, **kwargs):
+        return self._coordination_run_ops.list_runs(owner_agent, **kwargs)
+
+    def update_coordination_run(self, run_id, **kwargs):
+        return self._coordination_run_ops.update_run(run_id, **kwargs)
+
+    def attach_coordination_resource(self, run_id, resource_type, resource_id, role):
+        return self._coordination_run_ops.attach_resource(
+            run_id, resource_type, resource_id, role
+        )
+
+    def list_coordination_resources(self, run_id):
+        return self._coordination_run_ops.list_resources(run_id)
+
+    def claim_coordination_terminal_notifications(
+        self, resource_type, resource_id, status
+    ):
+        return self._coordination_run_ops.claim_terminal_notifications(
+            resource_type, resource_id, status
+        )
+
+    def release_coordination_terminal_notification(
+        self, run_id, resource_type, resource_id, status
+    ):
+        return self._coordination_run_ops.release_terminal_notification(
+            run_id, resource_type, resource_id, status
+        )
 
     # =========================================================================
     # Access Requests (Issue #311)

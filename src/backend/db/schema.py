@@ -1102,6 +1102,41 @@ TABLES = {
     """,
 
     # -------------------------------------------------------------------------
+    # Coordination Runs (durable cross-agent business-work correlation)
+    # -------------------------------------------------------------------------
+    "coordination_runs": """
+        CREATE TABLE IF NOT EXISTS coordination_runs (
+            id TEXT PRIMARY KEY,
+            owner_agent TEXT NOT NULL,
+            root_execution_id TEXT,
+            outcome TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK(status IN ('active', 'waiting', 'blocked', 'completed', 'cancelled')),
+            context TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            closed_at TEXT
+        )
+    """,
+
+    "coordination_run_resources": """
+        CREATE TABLE IF NOT EXISTS coordination_run_resources (
+            run_id TEXT NOT NULL,
+            resource_type TEXT NOT NULL
+                CHECK(resource_type IN ('execution', 'operator_queue')),
+            resource_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            notified_status TEXT,
+            notified_at TEXT,
+            PRIMARY KEY (run_id, resource_type, resource_id),
+            FOREIGN KEY (run_id) REFERENCES coordination_runs(id) ON DELETE CASCADE
+        )
+    """,
+
+    # -------------------------------------------------------------------------
     # Access Requests (Issue #311 - Unified Channel Access Control)
     # -------------------------------------------------------------------------
     "access_requests": """
@@ -1394,6 +1429,8 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_event_subs_subscriber ON agent_event_subscriptions(subscriber_agent)",
     "CREATE INDEX IF NOT EXISTS idx_event_subs_source ON agent_event_subscriptions(source_agent)",
     "CREATE INDEX IF NOT EXISTS idx_event_subs_source_type ON agent_event_subscriptions(source_agent, event_type)",
+    "CREATE INDEX IF NOT EXISTS idx_coordination_runs_owner_status ON coordination_runs(owner_agent, status, updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_coordination_resources_lookup ON coordination_run_resources(resource_type, resource_id)",
     "CREATE INDEX IF NOT EXISTS idx_events_source ON agent_events(source_agent, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_events_type ON agent_events(event_type)",
 

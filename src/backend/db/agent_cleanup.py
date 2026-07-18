@@ -127,6 +127,7 @@ AGENT_REFS: List[AgentRef] = [
     AgentRef("agent_event_subscriptions",    "subscriber_agent",  Policy.CASCADE),
     AgentRef("agent_event_subscriptions",    "source_agent",      Policy.CASCADE),
     AgentRef("agent_events",                 "source_agent",      Policy.CASCADE),
+    AgentRef("coordination_runs",            "owner_agent",       Policy.CASCADE),
 
     # --- Files / shared folders --------------------------------------------
     AgentRef("agent_shared_folder_config",   "agent_name",        Policy.CASCADE),
@@ -228,6 +229,8 @@ LINK_CHAINED_DELETES: List[tuple] = [
     # main cascade loop runs LINK_CHAINED_DELETES first, then
     # AGENT_REFS — so the JOIN still resolves).
     ("agent_loop_runs",           "loop_id",    "agent_loops",         "agent_name"),
+    # Resource links belong to coordination_runs and carry no agent column.
+    ("coordination_run_resources", "run_id",    "coordination_runs",   "owner_agent"),
 ]
 
 

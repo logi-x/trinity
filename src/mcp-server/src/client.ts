@@ -23,6 +23,10 @@ import type {
   ActivityTimelineResponse,
   OperatorQueueItem,
   OperatorQueueListResponse,
+  CoordinationRun,
+  CoordinationRunStatus,
+  CoordinationResourceType,
+  CoordinationRunResource,
   CompatibilityReport,
   AgentFileTreeResponse,
 } from "./types.js";
@@ -1380,6 +1384,82 @@ export class TrinityClient {
     return this.request<OperatorQueueItem>(
       "POST",
       `/api/operator-queue/${encodeURIComponent(itemId)}/respond`,
+      body,
+    );
+  }
+
+  // ============================================================================
+  // Coordination Runs
+  // ============================================================================
+
+  async createCoordinationRun(
+    agentName: string,
+    body: {
+      outcome: string;
+      root_execution_id?: string;
+      context?: Record<string, unknown>;
+    },
+  ): Promise<CoordinationRun> {
+    return this.request<CoordinationRun>(
+      "POST",
+      `/api/agents/${encodeURIComponent(agentName)}/coordination-runs`,
+      body,
+    );
+  }
+
+  async listCoordinationRuns(
+    agentName: string,
+    params: { status?: CoordinationRunStatus; limit?: number } = {},
+  ): Promise<CoordinationRun[]> {
+    const sp = new URLSearchParams();
+    if (params.status) sp.set("status", params.status);
+    if (params.limit !== undefined) sp.set("limit", String(params.limit));
+    const qs = sp.toString();
+    return this.request<CoordinationRun[]>(
+      "GET",
+      `/api/agents/${encodeURIComponent(agentName)}/coordination-runs${qs ? `?${qs}` : ""}`,
+    );
+  }
+
+  async getCoordinationRun(
+    agentName: string,
+    runId: string,
+  ): Promise<CoordinationRun> {
+    return this.request<CoordinationRun>(
+      "GET",
+      `/api/agents/${encodeURIComponent(agentName)}/coordination-runs/${encodeURIComponent(runId)}`,
+    );
+  }
+
+  async updateCoordinationRun(
+    agentName: string,
+    runId: string,
+    body: {
+      expected_version: number;
+      status?: CoordinationRunStatus;
+      outcome?: string;
+      context?: Record<string, unknown>;
+    },
+  ): Promise<CoordinationRun> {
+    return this.request<CoordinationRun>(
+      "PATCH",
+      `/api/agents/${encodeURIComponent(agentName)}/coordination-runs/${encodeURIComponent(runId)}`,
+      body,
+    );
+  }
+
+  async attachCoordinationResource(
+    agentName: string,
+    runId: string,
+    body: {
+      resource_type: CoordinationResourceType;
+      resource_id: string;
+      role: string;
+    },
+  ): Promise<CoordinationRunResource> {
+    return this.request<CoordinationRunResource>(
+      "POST",
+      `/api/agents/${encodeURIComponent(agentName)}/coordination-runs/${encodeURIComponent(runId)}/resources`,
       body,
     );
   }

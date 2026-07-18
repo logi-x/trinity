@@ -10,7 +10,7 @@ types are coarse (Integer/Float/Text) — sufficient for query building and
 matching the sqlite storage classes. Regenerate when schema.py changes.
 """
 
-from sqlalchemy import Column, Float, MetaData, Table, Text
+from sqlalchemy import Column, Float, MetaData, Table, Text, UniqueConstraint
 from sqlalchemy import Integer as _Integer
 from sqlalchemy.types import TypeDecorator
 
@@ -950,6 +950,40 @@ agent_events = Table(
     Column("payload", Text),
     Column("subscriptions_triggered", Integer),
     Column("created_at", Text),
+)
+
+coordination_runs = Table(
+    "coordination_runs",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("owner_agent", Text),
+    Column("root_execution_id", Text),
+    Column("outcome", Text),
+    Column("status", Text),
+    Column("context", Text),
+    Column("version", Integer),
+    Column("created_by", Text),
+    Column("created_at", Text),
+    Column("updated_at", Text),
+    Column("closed_at", Text),
+)
+
+coordination_run_resources = Table(
+    "coordination_run_resources",
+    metadata,
+    Column("run_id", Text, primary_key=True),
+    Column("resource_type", Text, primary_key=True),
+    Column("resource_id", Text, primary_key=True),
+    Column("role", Text),
+    Column("created_at", Text),
+    Column("notified_status", Text),
+    Column("notified_at", Text),
+    UniqueConstraint(
+        "run_id",
+        "resource_type",
+        "resource_id",
+        name="uq_coordination_run_resource",
+    ),
 )
 
 access_requests = Table(

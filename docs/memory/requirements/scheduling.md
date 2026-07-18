@@ -466,6 +466,82 @@
 
 ---
 
+## 36. Coordination Runs
+
+### 36.1 Durable Cross-Agent Correlation
+
+- **Status**: ✅ Implemented
+- **Scope**: OSS core, edition-agnostic orchestration primitive.
+- **Problem**: Trinity durably tracks individual executions, fan-outs,
+  loops, retries, validations, and operator-queue requests, but it has no
+  common identity that correlates those resources when one agent
+  coordinates a longer-lived outcome across multiple agents and operator
+  decisions.
+- **Boundary**: A coordination run is not a pipeline or DAG engine. Trinity
+  stores correlation, generic lifecycle, linked resource identities, and an
+  opaque context document. The owning agent remains solely responsible for
+  interpreting context, selecting owners, advancing business stages,
+  enforcing acceptance criteria, choosing retries or compensation, and
+  deciding when the outcome is complete. Trinity never executes declared
+  transitions or interprets business-stage semantics.
+- **Run record**:
+  - Platform-generated ID with `cr_` prefix.
+  - One `owner_agent` and optional `root_execution_id`.
+  - Human-readable `outcome`.
+  - Generic lifecycle: `active`, `waiting`, `blocked`, `completed`, or
+    `cancelled`.
+  - Opaque JSON `context`, size-bounded and returned without interpretation.
+  - Monotonic `version` used for optimistic concurrency, plus created,
+    updated, and optional closed timestamps.
+- **Resource links**:
+  - A run may link existing `execution` and `operator_queue` resources.
+  - Links carry a bounded agent-defined `role` such as `root`, `lead`,
+    `contributor`, or `approval`; Trinity stores but does not interpret it.
+  - `(run_id, resource_type, resource_id)` is unique and attachment is
+    idempotent.
+  - Resources must exist and be accessible to the authenticated owner. This
+    preserves delegated/shared-agent use while preventing the correlation API
+    becoming an existence oracle across access boundaries.
+- **API and access**:
+  - Agent-scoped CRUD is exposed under
+    `/api/agents/{name}/coordination-runs`.
+  - Owners and explicitly authorized agent identities may read; only the
+    owning user or the run's `owner_agent` identity may create, mutate, or
+    attach resources.
+  - Runs are never hard-deleted through the public API; terminal status keeps
+    the audit trail intact.
+- **Continuation events**:
+  - When a linked execution reaches a terminal state, Trinity persists and
+    emits `coordination.execution.terminal` on behalf of the run owner.
+  - When a linked operator-queue request is answered, cancelled, or expires,
+    Trinity persists and emits `coordination.operator_queue.terminal` on
+    behalf of the run owner.
+  - Events have Trinity event IDs; payloads include the coordination run ID,
+    resource ID, terminal status, and link role. Existing event subscriptions provide the optional
+    event-to-agent wake-up; no heartbeat or backend transition engine is
+    introduced.
+  - Event production is idempotent per run/resource/terminal status so retry
+    and response races cannot wake the owner twice for the same transition.
+- **MCP tools**: create, get, list, update, and attach-resource operations
+  mirror the REST contract. Execution results, logs, costs, retries, and
+  operator responses remain authoritative in their existing APIs and are not
+  copied into the coordination record.
+- **Database**: SQLite fresh-schema + migration-registry DDL and PostgreSQL
+  Alembic revision `0015_coordination_runs` ship together. The shared agent
+  cleanup registry handles owner rename/delete and chained resource-link
+  cleanup; polymorphic resource links intentionally carry no invalid cross-table
+  foreign key.
+- **Acceptance criteria**:
+  1. One coordination run correlates a root execution, delegated executions,
+     and an approval without duplicating their authoritative status data.
+  2. Optimistic updates reject a stale version without losing the newer
+     context.
+  3. Terminal linked resources emit exactly one persisted coordination event
+     and can trigger an existing self-subscription on the owner agent.
+  4. Cross-owner reads and mutations fail closed without revealing whether a
+     run or resource exists.
+  5. Agent-defined pipeline files and transition ownership remain unchanged.
+
 ## 37. MCP Chat Timeout Recovery (#914)
 
 ### 37.1 `chat_with_agent` Gateway-Timeout Receipt (#914)

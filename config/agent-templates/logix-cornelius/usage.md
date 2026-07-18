@@ -80,8 +80,10 @@ cd /home/logix/trinity
 # 1) Build trinity-agent-base:latest  (takes several minutes)
 ./scripts/deploy/build-base-image.sh
 
-# 2) Recreate the agent container onto that image
-#    (workspace volume kept — Brain/, venv, .env stay)
+# 2) Recreate agent container(s) onto that image
+#    (workspace volumes kept — Brain/, venv, .env stay)
+
+# Single agent
 docker exec trinity-backend python3 -c "
 import asyncio
 from services.docker_service import get_agent_container
@@ -91,6 +93,27 @@ c = get_agent_container(name)
 assert c, 'agent container not found'
 asyncio.run(recreate_container_with_updated_config(name, c, 'system'))
 print('recreated', name)
+"
+
+# Multiple agents
+docker exec trinity-backend python3 -c "
+import asyncio
+from services.docker_service import get_agent_container
+from services.agent_service.lifecycle import recreate_container_with_updated_config
+names = [
+    'cornelius',
+    'experts',
+    'atlas',
+]
+async def main():
+    for name in names:
+        c = get_agent_container(name)
+        if not c:
+            print('skip (not found):', name)
+            continue
+        await recreate_container_with_updated_config(name, c, 'system')
+        print('recreated', name)
+asyncio.run(main())
 "
 ```
 
