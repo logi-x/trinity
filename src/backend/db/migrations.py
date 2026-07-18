@@ -2723,6 +2723,53 @@ def _migrate_agent_reports_table(cursor, conn):
     print("Created agent_reports table (#918)")
 
 
+def _migrate_coordination_runs_tables(cursor, conn):
+    """Create durable coordination-run correlation tables.
+
+    PostgreSQL parity is provided by Alembic revision 0015.
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS coordination_runs (
+            id TEXT PRIMARY KEY,
+            owner_agent TEXT NOT NULL,
+            root_execution_id TEXT,
+            outcome TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK(status IN ('active', 'waiting', 'blocked', 'completed', 'cancelled')),
+            context TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            closed_at TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS coordination_run_resources (
+            run_id TEXT NOT NULL,
+            resource_type TEXT NOT NULL
+                CHECK(resource_type IN ('execution', 'operator_queue')),
+            resource_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            notified_status TEXT,
+            notified_at TEXT,
+            PRIMARY KEY (run_id, resource_type, resource_id),
+            FOREIGN KEY (run_id) REFERENCES coordination_runs(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_coordination_runs_owner_status "
+        "ON coordination_runs(owner_agent, status, updated_at DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_coordination_resources_lookup "
+        "ON coordination_run_resources(resource_type, resource_id)"
+    )
+    conn.commit()
+    print("Created coordination run tables")
+
+
 MIGRATIONS = [
     ("agent_sharing", _migrate_agent_sharing_table),
     ("schedule_executions_observability", _migrate_schedule_executions_observability),
@@ -2809,4 +2856,5 @@ MIGRATIONS = [
     ("agent_ownership_tts_voice", _migrate_agent_ownership_tts_voice),
     ("agent_ownership_public_channel_prompt", _migrate_agent_ownership_public_channel_prompt),
     ("public_chat_messages_sender", _migrate_public_chat_messages_sender),
+    ("coordination_runs_tables", _migrate_coordination_runs_tables),
 ]

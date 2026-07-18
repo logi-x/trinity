@@ -98,6 +98,7 @@ from routers.operator_queue import router as operator_queue_router, set_websocke
 from routers.voice import router as voice_router
 from routers.voip import public_router as voip_public_router, auth_router as voip_auth_router
 from routers.event_subscriptions import router as event_subscriptions_router, set_websocket_manager as set_event_subs_ws_manager, set_filtered_websocket_manager as set_event_subs_filtered_ws_manager
+from routers.coordination_runs import router as coordination_runs_router
 from routers.users import router as users_router
 from routers.debug import router as debug_router  # #306 soak instrumentation
 from routers.a2a import router as a2a_router  # #737 A2A Agent Cards
@@ -957,6 +958,7 @@ app.include_router(voice_router)  # Voice Chat (VOICE-001)
 app.include_router(voip_public_router)  # VoIP Telephony Media Streams WS (VOIP-001)
 app.include_router(voip_auth_router)  # VoIP Telephony binding + trigger (VOIP-001)
 app.include_router(event_subscriptions_router)  # Agent Event Subscriptions (EVT-001)
+app.include_router(coordination_runs_router)  # Durable cross-agent work correlation
 app.include_router(users_router)  # User Management (ROLE-001)
 app.include_router(debug_router)  # #306 soak dashboard
 app.include_router(a2a_router)  # A2A Agent Cards (#737)

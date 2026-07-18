@@ -25,6 +25,10 @@ pyotp==2.9.0
 
 # Data / storage
 redis==5.2.1
+# Unit-test Redis double (test_dispatch_breaker, test_187_jwt_revocation).
+# Needed so `pytest` against the backend image can collect the full unit suite;
+# not used at runtime. Keep aligned with tests/requirements-test.txt floor.
+fakeredis==2.26.2
 # 2.0.40+ required for CPython 3.14 (older releases raise TypeError in
 # make_union_type when ORM models use modern typing — breaks payments_py/a2a import).
 sqlalchemy==2.0.51

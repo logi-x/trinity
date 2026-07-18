@@ -29,6 +29,7 @@ import { createPipelineTools } from "./tools/pipelines.js";
 import { createMemoryTools } from "./tools/memory.js";
 import { createLoopTools } from "./tools/loops.js";
 import { createOperatorQueueTools } from "./tools/operator_queue.js";
+import { createCoordinationRunTools } from "./tools/coordination_runs.js";
 import { createConnectorTools } from "./tools/connector.js";
 import { createGitTools } from "./tools/git.js";
 import { withAudit } from "./audit.js";
@@ -265,6 +266,7 @@ export async function createServer(config: ServerConfig = {}) {
     createLoopTools(client, requireApiKey),       // Sequential agent loops (#740)
     createVoipTools(client, requireApiKey),       // VoIP telephony — call_user (VOIP-001, #1056)
     createOperatorQueueTools(client, requireApiKey), // Operator queue read + respond (OPS-001, #1101/#1104)
+    createCoordinationRunTools(client, requireApiKey), // Cross-agent business-work correlation
     createGitTools(client, requireApiKey),           // Direct git status/sync/log/pull/sync-state/reset (#905)
   ];
   // Operator tools: hidden from connector-scoped keys.

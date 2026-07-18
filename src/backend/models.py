@@ -1,10 +1,11 @@
 """
 Pydantic models for the Trinity backend API.
 """
+import json
 import re
 
 from pydantic import BaseModel, EmailStr, Field, SecretStr, field_validator, model_validator
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from datetime import datetime
 from enum import Enum
 
@@ -1856,6 +1857,100 @@ class BulkCancelRequest(BaseModel):
     never cancel items the operator never saw.
     """
     ids: List[str] = Field(..., min_length=1, max_length=500)
+
+
+# =============================================================================
+# Coordination Run Models (routers/coordination_runs.py)
+# =============================================================================
+
+CoordinationRunStatus = Literal[
+    "active", "waiting", "blocked", "completed", "cancelled"
+]
+CoordinationResourceType = Literal["execution", "operator_queue"]
+COORDINATION_CONTEXT_MAX_BYTES = 65_536
+
+
+def _validate_coordination_context(value):
+    if value is None:
+        return value
+    try:
+        encoded = json.dumps(value, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("context must be JSON-serializable") from exc
+    if len(encoded) > COORDINATION_CONTEXT_MAX_BYTES:
+        raise ValueError(
+            f"context exceeds {COORDINATION_CONTEXT_MAX_BYTES} bytes"
+        )
+    return value
+
+
+class CoordinationRunCreate(BaseModel):
+    """Create a durable correlation record owned by one agent."""
+
+    outcome: str = Field(..., min_length=1, max_length=2000)
+    root_execution_id: Optional[str] = Field(None, min_length=1, max_length=255)
+    context: Optional[Dict[str, Any]] = None
+
+    _bounded_context = field_validator("context")(
+        _validate_coordination_context
+    )
+
+
+class CoordinationRunUpdate(BaseModel):
+    """Compare-and-set update; agent-defined context remains opaque."""
+
+    expected_version: int = Field(..., ge=1)
+    status: Optional[CoordinationRunStatus] = None
+    outcome: Optional[str] = Field(None, min_length=1, max_length=2000)
+    context: Optional[Dict[str, Any]] = None
+
+    _bounded_context = field_validator("context")(
+        _validate_coordination_context
+    )
+
+    @model_validator(mode="after")
+    def require_change(self):
+        changed = self.model_fields_set - {"expected_version"}
+        if not changed:
+            raise ValueError("At least one field must be updated")
+        for field in ("status", "outcome"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
+
+
+class CoordinationResourceAttach(BaseModel):
+    resource_type: CoordinationResourceType
+    resource_id: str = Field(..., min_length=1, max_length=255)
+    role: str = Field(..., min_length=1, max_length=100)
+
+
+class CoordinationRunResource(BaseModel):
+    run_id: str
+    resource_type: CoordinationResourceType
+    resource_id: str
+    role: str
+    created_at: str
+    notified_status: Optional[str] = None
+    notified_at: Optional[str] = None
+
+
+class CoordinationRun(BaseModel):
+    id: str
+    owner_agent: str
+    root_execution_id: Optional[str] = None
+    outcome: str
+    status: CoordinationRunStatus
+    context: Optional[Dict[str, Any]] = None
+    version: int
+    created_by: str
+    created_at: str
+    updated_at: str
+    closed_at: Optional[str] = None
+
+
+class CoordinationRunDetail(CoordinationRun):
+    resources: List[CoordinationRunResource] = Field(default_factory=list)
 
 
 class ClearResolvedRequest(BaseModel):

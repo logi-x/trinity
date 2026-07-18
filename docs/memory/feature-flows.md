@@ -15,6 +15,7 @@
 
 | Date | ID | Change | Flow |
 |------|-----|--------|------|
+| 2026-07-18 | — | feat(orchestration): durable coordination runs correlate cross-agent executions and operator decisions, with replay-safe terminal events and agent-owned workflow semantics | [coordination-runs.md](feature-flows/coordination-runs.md) |
 | 2026-07-07 | #1500 | fix(ui): Tasks tab joins `FULLSCREEN_TABS` — task list flex-fills the viewport (old `max-h-96` cap becomes the `min-h-96` floor), panel root is the short-viewport fallback scroller; e2e fill/parity spec + `.first()` repair of the #954 spec broken by #1114's measuring mirror | [tasks-tab.md](feature-flows/tasks-tab.md) |
 | 2026-07-07 | trinity-enterprise#107 | feat: auto-seed a default **Cornelius** second-brain agent on fresh install with the Brain Orb enabled — bundled `local:cornelius` template (pre-generated seed graph so the orb renders immediately); first-run-only (durable `cornelius_seeded` flag) + fresh-install-scoped (`count_non_system_agents()`) `ensure_seeded()`; setup-completion BackgroundTask + `main.py` lifespan safety-net; local bundle ⇒ no upstream `origin` (durable ownership deferred to fork-to-own trinity-enterprise#109) | [cornelius-default-agent.md](feature-flows/cornelius-default-agent.md) |
 | 2026-07-06 | #1450 | fix(canary): B-01 queue-status coherence — Side B (queued id-count) reads via the SAME `get_engine()`/`DATABASE_URL` seam as the accessor (backend-consistent on Postgres, not raw-sqlite vs engine; #300/#1093 gap), dedicated `queued_ids_via_engine` field leaves `queued_exec_ids` for B-02/E-02; collector does one confirm-re-read so a transient enqueue/drain race self-heals while a persistent drift still fires; engine-read failure → B-01 skip. Production residue of #1446 | [architecture.md](architecture.md) |
@@ -129,6 +130,7 @@
 |------|----------|-------------|
 | Agent-to-Agent Collaboration | [agent-to-agent-collaboration.md](feature-flows/agent-to-agent-collaboration.md) | Inter-agent communication via MCP |
 | Agent Event Subscriptions | [agent-event-subscriptions.md](feature-flows/agent-event-subscriptions.md) | Lightweight pub/sub for inter-agent event pipelines |
+| Coordination Runs | [coordination-runs.md](feature-flows/coordination-runs.md) | Durable cross-agent business-work correlation without a central DAG engine |
 | Agent Permissions | [agent-permissions.md](feature-flows/agent-permissions.md) | Agent communication permissions |
 | Agent Sharing | [agent-sharing.md](feature-flows/agent-sharing.md) | Cross-channel email allow-list (web/Slack/Telegram) with access policy and pending requests |
 | Agent Shared Folders | [agent-shared-folders.md](feature-flows/agent-shared-folders.md) | File collaboration via shared volumes |

@@ -90,7 +90,13 @@ _cleanup = _load("trinity_db_agent_cleanup", "db/agent_cleanup.py")
 # Columns that name an agent identifier. Matches the set the registry
 # tracks; a new agent-id column name would need adding here AND in
 # AGENT_REFS (the test makes the second omission loud).
-_AGENT_ID_COLUMNS = ("agent_name", "source_agent", "target_agent", "subscriber_agent")
+_AGENT_ID_COLUMNS = (
+    "agent_name",
+    "owner_agent",
+    "source_agent",
+    "target_agent",
+    "subscriber_agent",
+)
 
 _COL_RE = re.compile(
     r"^\s*(" + "|".join(_AGENT_ID_COLUMNS) + r")\b", re.MULTILINE

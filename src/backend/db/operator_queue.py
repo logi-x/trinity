@@ -290,10 +290,20 @@ class OperatorQueueOperations:
 
         Returns the number of items actually cancelled.
         """
+        return len(
+            self.bulk_cancel_item_ids(ids, accessible_agent_names)
+        )
+
+    def bulk_cancel_item_ids(
+        self,
+        ids: List[str],
+        accessible_agent_names: Optional[Set[str]] = None,
+    ) -> List[str]:
+        """Cancel pending items and return only rows won by this update."""
         if not ids:
-            return 0
+            return []
         if accessible_agent_names is not None and len(accessible_agent_names) == 0:
-            return 0
+            return []
 
         conds = [
             operator_queue.c.status == "pending",
@@ -303,10 +313,13 @@ class OperatorQueueOperations:
             conds.append(operator_queue.c.agent_name.in_(sorted(accessible_agent_names)))
 
         with get_engine().begin() as conn:
-            result = conn.execute(
-                update(operator_queue).where(and_(*conds)).values(status="cancelled")
+            rows = conn.execute(
+                update(operator_queue)
+                .where(and_(*conds))
+                .values(status="cancelled")
+                .returning(operator_queue.c.id)
             )
-            return result.rowcount
+            return list(rows.scalars().all())
 
     def clear_resolved_items(
         self,
@@ -368,9 +381,13 @@ class OperatorQueueOperations:
 
         Returns number of items expired.
         """
+        return len(self.mark_expired_item_ids())
+
+    def mark_expired_item_ids(self) -> List[str]:
+        """Mark expired items and return only rows won by this update."""
         now = utc_now_iso()
         with get_engine().begin() as conn:
-            result = conn.execute(
+            rows = conn.execute(
                 update(operator_queue)
                 .where(
                     and_(
@@ -380,8 +397,9 @@ class OperatorQueueOperations:
                     )
                 )
                 .values(status="expired")
+                .returning(operator_queue.c.id)
             )
-            return result.rowcount
+            return list(rows.scalars().all())
 
     def get_stats(self, accessible_agent_names: Optional[Set[str]] = None) -> Dict:
         """Get queue statistics.

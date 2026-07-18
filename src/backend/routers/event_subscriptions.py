@@ -6,8 +6,6 @@ Agents emit named events, other agents subscribe and receive
 templated messages as async tasks when matching events fire.
 """
 
-import asyncio
-import json
 import logging
 import re
 from typing import Optional
@@ -26,145 +24,20 @@ from db_models import (
     AgentEvent,
     AgentEventList,
 )
+from services import agent_event_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["event-subscriptions"])
 
-# WebSocket managers for broadcasting events
-_websocket_manager = None
-_filtered_websocket_manager = None
-
-
 def set_websocket_manager(manager):
     """Set the WebSocket manager for broadcasting events."""
-    global _websocket_manager
-    _websocket_manager = manager
+    agent_event_service.set_websocket_manager(manager)
 
 
 def set_filtered_websocket_manager(manager):
     """Set the filtered WebSocket manager for Trinity Connect."""
-    global _filtered_websocket_manager
-    _filtered_websocket_manager = manager
-
-
-# ============================================================================
-# Helpers
-# ============================================================================
-
-def _interpolate_template(template: str, payload: dict) -> str:
-    """
-    Replace {{payload.field}} placeholders with actual values.
-
-    Supports nested access: {{payload.nested.field}}
-    Missing fields are left as-is.
-    """
-    def replacer(match):
-        path = match.group(1)  # e.g., "payload.pred_id"
-        parts = path.split(".")
-        # Skip the leading "payload" prefix
-        if parts and parts[0] == "payload":
-            parts = parts[1:]
-        value = payload
-        for part in parts:
-            if isinstance(value, dict) and part in value:
-                value = value[part]
-            else:
-                return match.group(0)  # Leave placeholder as-is
-        return str(value)
-
-    return re.sub(r"\{\{(payload(?:\.[a-zA-Z0-9_]+)+)\}\}", replacer, template)
-
-
-async def _broadcast_event(event: AgentEvent, subscriptions_triggered: int):
-    """Broadcast an agent event via WebSocket."""
-    ws_event = {
-        "type": "agent_event",
-        "event_id": event.id,
-        "source_agent": event.source_agent,
-        "event_type": event.event_type,
-        "subscriptions_triggered": subscriptions_triggered,
-        "timestamp": event.created_at,
-    }
-    event_json = json.dumps(ws_event)
-
-    if _websocket_manager:
-        await _websocket_manager.broadcast(event_json)
-    if _filtered_websocket_manager:
-        await _filtered_websocket_manager.broadcast_filtered(ws_event)
-
-
-async def _trigger_subscription(
-    subscription: EventSubscription,
-    event: AgentEvent,
-):
-    """
-    Send an async task to the subscribing agent with the interpolated message.
-
-    Uses the backend's internal task endpoint to avoid circular MCP calls.
-    """
-    import httpx
-
-    # Interpolate payload into target message
-    message = subscription.target_message
-    if event.payload:
-        message = _interpolate_template(message, event.payload)
-
-    # Add event context to the message
-    message = (
-        f"[Event from {event.source_agent}: {event.event_type}]\n\n"
-        f"{message}"
-    )
-
-    try:
-        # Call the agent's task endpoint directly (async, fire-and-forget)
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"http://localhost:8000/api/agents/{subscription.subscriber_agent}/task",
-                json={
-                    "message": message,
-                    "async_mode": True,  # Fire-and-forget
-                    "system_prompt": (
-                        f"This task was triggered by an event subscription. "
-                        f"Source agent: {event.source_agent}, "
-                        f"Event type: {event.event_type}, "
-                        f"Event ID: {event.id}"
-                    ),
-                },
-                headers={
-                    "Authorization": f"Bearer {_get_internal_token()}",
-                    "X-Source-Agent": event.source_agent,
-                    "X-Via-MCP": "true",
-                },
-            )
-            if response.status_code >= 400:
-                logger.warning(
-                    f"[EVT-001] Failed to trigger subscription {subscription.id} "
-                    f"on {subscription.subscriber_agent}: {response.status_code} {response.text[:200]}"
-                )
-            else:
-                logger.info(
-                    f"[EVT-001] Triggered subscription {subscription.id}: "
-                    f"{event.source_agent}.{event.event_type} -> {subscription.subscriber_agent}"
-                )
-    except Exception as e:
-        logger.error(
-            f"[EVT-001] Error triggering subscription {subscription.id} "
-            f"on {subscription.subscriber_agent}: {e}"
-        )
-
-
-def _get_internal_token() -> str:
-    """Get a JWT token for internal API calls."""
-    from jose import jwt
-    from config import SECRET_KEY, ALGORITHM
-    from datetime import datetime, timedelta
-
-    payload = {
-        "sub": "admin",
-        "exp": datetime.utcnow() + timedelta(minutes=5),
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    agent_event_service.set_filtered_websocket_manager(manager)
 
 
 # ============================================================================
@@ -384,30 +257,11 @@ async def emit_event(
             detail="event_type must be a dot-separated identifier (e.g., 'prediction.resolved')",
         )
 
-    # Find matching subscriptions
-    matching_subs = db.find_matching_event_subscriptions(source_agent, data.event_type)
-
-    # Persist the event
-    event = db.create_agent_event(
+    return await agent_event_service.emit(
         source_agent=source_agent,
         event_type=data.event_type,
         payload=data.payload,
-        subscriptions_triggered=len(matching_subs),
     )
-
-    logger.info(
-        f"[EVT-001] Event emitted: {source_agent}.{data.event_type} "
-        f"({len(matching_subs)} subscriptions matched)"
-    )
-
-    # Trigger matching subscriptions (fire-and-forget)
-    for sub in matching_subs:
-        asyncio.create_task(_trigger_subscription(sub, event))
-
-    # Broadcast event via WebSocket
-    await _broadcast_event(event, len(matching_subs))
-
-    return event
 
 
 @router.post("/agents/{name}/emit-event", response_model=AgentEvent, status_code=201)
@@ -429,26 +283,11 @@ async def emit_event_for_agent(
             detail="event_type must be a dot-separated identifier",
         )
 
-    matching_subs = db.find_matching_event_subscriptions(name, data.event_type)
-
-    event = db.create_agent_event(
+    return await agent_event_service.emit(
         source_agent=name,
         event_type=data.event_type,
         payload=data.payload,
-        subscriptions_triggered=len(matching_subs),
     )
-
-    logger.info(
-        f"[EVT-001] Event emitted for {name}: {data.event_type} "
-        f"({len(matching_subs)} subscriptions matched)"
-    )
-
-    for sub in matching_subs:
-        asyncio.create_task(_trigger_subscription(sub, event))
-
-    await _broadcast_event(event, len(matching_subs))
-
-    return event
 
 
 # ============================================================================
