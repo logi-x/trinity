@@ -101,6 +101,7 @@ import asyncio
 from services.docker_service import get_agent_container
 from services.agent_service.lifecycle import recreate_container_with_updated_config
 names = [
+    'logix-system',
     'cornelius',
     'experts',
     'atlas',
