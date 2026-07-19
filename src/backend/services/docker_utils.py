@@ -211,6 +211,22 @@ async def volume_remove(volume) -> None:
 
 
 # =============================================================================
+# Network Operations
+# =============================================================================
+
+async def network_get(name: str) -> Any:
+    """Get a Docker network without blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_docker_executor, docker_client.networks.get, name)
+
+
+async def network_connect(network, container) -> None:
+    """Connect a container to a Docker network without blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(_docker_executor, lambda: network.connect(container))
+
+
+# =============================================================================
 # Container Creation (Complex)
 # =============================================================================
 

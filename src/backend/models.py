@@ -97,9 +97,18 @@ class AgentConfig(BaseModel):
     runtime_model: Optional[str] = None  # Model override (e.g., "sonnet-4.5", "gemini-2.5-pro")
     # Security options
     full_capabilities: Optional[bool] = False  # True = Docker default caps (apt-get works), False = restricted (secure default)
+    # Operator-approved project/service networks, in addition to Trinity's
+    # mandatory agent network (AGENT-NETWORKS-001).
+    additional_networks: List[str] = Field(default_factory=list)
     # Fork-to-own creation (trinity-enterprise#93): copy the github: template
     # into a user-owned repo first; the agent is created from that copy.
     fork_to_own: Optional[ForkToOwnRequest] = None
+
+
+class AgentAdditionalNetworksUpdate(BaseModel):
+    """Body for PUT /api/agents/{name}/additional-networks."""
+
+    additional_networks: List[str] = Field(default_factory=list, max_length=8)
 
 
 class AgentStatus(BaseModel):

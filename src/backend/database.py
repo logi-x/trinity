@@ -638,6 +638,12 @@ class DatabaseManager:
     def set_resource_limits(self, agent_name: str, memory: str = None, cpu: str = None):
         return self._agent_ops.set_resource_limits(agent_name, memory, cpu)
 
+    def get_additional_networks(self, agent_name: str):
+        return self._agent_ops.get_additional_networks(agent_name)
+
+    def set_additional_networks(self, agent_name: str, networks: list):
+        return self._agent_ops.set_additional_networks(agent_name, networks)
+
     # =========================================================================
     # Agent Read-Only Mode (delegated to db/agents.py)
     # =========================================================================

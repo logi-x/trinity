@@ -39,6 +39,17 @@
 - **Description**: Real-time container metrics in agent header
 - **Key Features**: CPU/memory usage, network I/O, uptime display, auto-refresh every 10 seconds
 
+### AGENT-NETWORKS-001 Additional Docker Networks
+- **Status**: ✅ Implemented (2026-07-19)
+- **Description**: An agent may be attached to explicitly approved external Docker networks so project-owner agents can reach project-local services such as databases and Redis without exposing host ports.
+- **Key Features**:
+  - Per-agent `additional_networks` configuration persists in `agent_ownership` and is mirrored in the `trinity.additional-networks` container label.
+  - `AGENT_ADDITIONAL_NETWORK_ALLOWLIST` is a backend-wide, comma-separated allowlist; an empty allowlist denies every additional network.
+  - Trinity's primary agent network is always attached separately. Built-in Docker networks and Trinity's platform network are forbidden even if mistakenly allowlisted.
+  - Create and recreate paths preflight network existence, attach each approved network, and reconcile drift on the next agent start.
+  - Owners can inspect or update the desired set through `GET/PUT /api/agents/{name}/additional-networks`; changes take effect after restart/recreate.
+- **Flow**: `docs/memory/feature-flows/agent-additional-networks.md`
+
 ---
 
 ## 4. Template System

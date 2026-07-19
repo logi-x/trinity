@@ -97,6 +97,44 @@ export function createAgentTools(
       },
     },
 
+    getAgentAdditionalNetworks: {
+      name: "get_agent_additional_networks",
+      description:
+        "Get an agent's desired and currently attached operator-approved external Docker networks. " +
+        "A restart_needed result means the container must be restarted to reconcile the setting.",
+      parameters: z.object({
+        name: z.string().describe("The agent whose additional networks should be inspected"),
+      }),
+      execute: async ({ name }: { name: string }, context?: { session?: McpAuthContext }) => {
+        const result = await getClient(context?.session).getAgentAdditionalNetworks(name);
+        return JSON.stringify(result, null, 2);
+      },
+    },
+
+    setAgentAdditionalNetworks: {
+      name: "set_agent_additional_networks",
+      description:
+        "Set an agent's external Docker networks from the operator's global allowlist. " +
+        "The change is persisted and applied on the next agent restart/recreation.",
+      parameters: z.object({
+        name: z.string().describe("The agent to configure"),
+        additional_networks: z
+          .array(z.string())
+          .max(8)
+          .describe("Exact Docker network names; use an empty list to remove all additional networks"),
+      }),
+      execute: async (
+        { name, additional_networks }: { name: string; additional_networks: string[] },
+        context?: { session?: McpAuthContext }
+      ) => {
+        const result = await getClient(context?.session).setAgentAdditionalNetworks(
+          name,
+          additional_networks
+        );
+        return JSON.stringify(result, null, 2);
+      },
+    },
+
     // ========================================================================
     // get_agent_info - Get agent template metadata and capabilities
     // ========================================================================
@@ -261,6 +299,13 @@ export function createAgentTools(
             "Branch to track for this agent. Default: 'main'. " +
             "Can also be specified in template URL as 'github:owner/repo@branch'."
           ),
+        additional_networks: z
+          .array(z.string())
+          .max(8)
+          .optional()
+          .describe(
+            "Operator-approved external Docker networks to attach in addition to Trinity's agent network"
+          ),
       }),
       execute: async (
         args: {
@@ -272,6 +317,7 @@ export function createAgentTools(
           mcp_servers?: string[];
           custom_instructions?: string;
           source_branch?: string;
+          additional_networks?: string[];
         },
         context: any
       ) => {
@@ -289,6 +335,7 @@ export function createAgentTools(
           mcp_servers: args.mcp_servers,
           custom_instructions: args.custom_instructions,
           source_branch: args.source_branch,
+          additional_networks: args.additional_networks,
         };
 
         // Get auth context from FastMCP session (set by authenticate callback)

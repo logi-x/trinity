@@ -76,6 +76,7 @@ TABLES = {
             autonomy_enabled INTEGER DEFAULT 0,
             memory_limit TEXT,
             cpu_limit TEXT,
+            additional_networks TEXT,
             full_capabilities INTEGER DEFAULT 0,
             read_only_mode INTEGER DEFAULT 0,
             read_only_config TEXT,

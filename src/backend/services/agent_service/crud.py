@@ -39,6 +39,13 @@ from .fork_to_own import fork_template_to_own_repo
 from .helpers import validate_base_image, is_claude_runtime, validate_runtime
 from .lifecycle import RESTRICTED_CAPABILITIES, FULL_CAPABILITIES
 from .capabilities import AGENT_TMPFS_MOUNT, AGENT_DEFAULT_TMPDIR, normalize_cpu, normalize_memory
+from .networks import (
+    ADDITIONAL_NETWORKS_LABEL,
+    connect_additional_networks,
+    preflight_additional_networks,
+    serialize_additional_networks_label,
+    validate_additional_networks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +216,11 @@ async def create_agent_internal(
     # SEC-172: Validate base image against allowlist before any Docker operations
     validate_base_image(config.base_image)
 
+    # AGENT-NETWORKS-001: reject an invalid request-level list before template
+    # cloning or other side effects. Template metadata is merged and validated
+    # again below once the final desired configuration is known.
+    config.additional_networks = validate_additional_networks(config.additional_networks)
+
     template_data = {}
     github_template_path = None
     github_repo_for_agent = None
@@ -290,6 +302,9 @@ async def create_agent_internal(
                 github_pat_for_agent = github_pat
                 config.resources = gh_template.get("resources", config.resources)
                 config.mcp_servers = gh_template.get("mcp_servers", config.mcp_servers)
+                config.additional_networks = gh_template.get(
+                    "additional_networks", config.additional_networks
+                )
             else:
                 # Dynamic GitHub template - use any github:owner/repo[@branch] format
                 # Requires system GitHub PAT to be configured
@@ -490,6 +505,9 @@ async def create_agent_internal(
                         template_data = yaml.safe_load(f)
                         config.type = template_data.get("type", config.type)
                         config.resources = template_data.get("resources", config.resources)
+                        config.additional_networks = template_data.get(
+                            "additional_networks", config.additional_networks
+                        )
                         config.tools = template_data.get("tools", config.tools)
                         creds = template_data.get("credentials", {})
                         mcp_servers = list(creds.get("mcp_servers", {}).keys())
@@ -623,6 +641,13 @@ async def create_agent_internal(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Template metadata is untrusted and may have replaced the request-level
+    # list. Re-run policy validation and Docker existence preflight before
+    # minting keys or creating any container resources.
+    config.additional_networks = validate_additional_networks(config.additional_networks)
+    if docker_client:
+        await preflight_additional_networks(config.additional_networks)
 
     # Phase: Agent-to-Agent Collaboration
     # Generate agent-scoped MCP API key for Trinity MCP access
@@ -939,6 +964,9 @@ async def create_agent_internal(
                     'trinity.template': config.template or '',
                     'trinity.agent-runtime': config.runtime or 'claude-code',
                     'trinity.full-capabilities': str(full_capabilities).lower(),
+                    ADDITIONAL_NETWORKS_LABEL: serialize_additional_networks_label(
+                        config.additional_networks
+                    ),
                     'trinity.base-image-version': get_platform_version()
                 },
                 # Always apply AppArmor for additional sandboxing
@@ -960,6 +988,8 @@ async def create_agent_internal(
                 # created agents never got a CPU limit on Linux.
                 nano_cpus=int(config.resources['cpu']) * 1_000_000_000,
             )
+
+            await connect_additional_networks(container, config.additional_networks)
 
             agent_status = get_agent_status_from_container(container)
 
@@ -984,6 +1014,10 @@ async def create_agent_internal(
                 current_user.username,
                 require_email=get_agent_default_require_email(),
             )
+            if not db.set_additional_networks(config.name, config.additional_networks):
+                raise RuntimeError(
+                    f"failed to persist additional networks for {config.name}"
+                )
 
             # Persist auto-assigned subscription (#74)
             if auto_assigned_subscription_id:

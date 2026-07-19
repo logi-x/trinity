@@ -80,6 +80,7 @@ agent_ownership = Table(
     Column("autonomy_enabled", Integer),
     Column("memory_limit", Text),
     Column("cpu_limit", Text),
+    Column("additional_networks", Text),
     Column("full_capabilities", Integer),
     Column("read_only_mode", Integer),
     Column("read_only_config", Text),

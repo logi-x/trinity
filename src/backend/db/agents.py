@@ -32,6 +32,7 @@ from .agent_settings import (
     FileSharingMixin,
     McpExposureMixin,
     TtsMixin,
+    NetworksMixin,
 )
 from utils.helpers import utc_now_iso
 
@@ -51,6 +52,7 @@ class AgentOperations(
     FileSharingMixin,
     McpExposureMixin,
     TtsMixin,
+    NetworksMixin,
 ):
     """Agent ownership, access control, and settings database operations.
 

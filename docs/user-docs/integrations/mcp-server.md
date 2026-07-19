@@ -1,6 +1,6 @@
 # MCP Server
 
-Trinity's MCP server exposes 98 tools for agent orchestration via the Model Context Protocol, enabling programmatic control from Claude Code, other MCP clients, or agent-to-agent communication.
+Trinity's MCP server exposes 100 tools for agent orchestration via the Model Context Protocol, enabling programmatic control from Claude Code, other MCP clients, or agent-to-agent communication.
 
 > 📺 **Watch:** [From Zero to Deployed AI Agent — MCP setup](https://youtu.be/-TSZyekDS6o) *(Apr 2026)* · [all videos](../videos.md)
 
@@ -44,7 +44,7 @@ Add Trinity as an MCP server in your Claude Code configuration:
 
 | Module | Tools | Description |
 |--------|-------|-------------|
-| `agents.ts` | 22 | Agent lifecycle, credentials, SSH, local deploy, GitHub sync, per-agent PAT, runtime-data export/import, compatibility report |
+| `agents.ts` | 24 | Agent lifecycle, credentials, SSH, local deploy, GitHub sync, per-agent PAT, additional Docker networks, runtime-data export/import, compatibility report |
 | `chat.ts` | 4 | Chat (gateway-timeout safe), fan-out, history, logs |
 | `schedules.ts` | 8 | Schedule CRUD and execution history |
 | `executions.ts` | 3 | Execution queries, async polling, activity monitoring |
@@ -90,6 +90,8 @@ An owner can publish an agent as its own first-class MCP tool. On the agent's **
 | `run_agent_loop` | Run the same task against an agent repeatedly (bounded, sequential), with templated messages and an optional stop signal. Poll with `get_loop_status`; stop gracefully with `stop_loop`. See [Agent Loops](../automation/agent-loops.md). |
 | `list_operator_queue` | Read the Operating Room queue (approvals, questions, alerts). Agent-scoped keys see only the calling agent plus its permitted agents. |
 | `create_coordination_run` | Start a durable correlation envelope for an outcome spanning agents, executions, and approvals. Pair with `attach_coordination_resource`, then update opaque context and generic lifecycle with `expected_version`. |
+| `get_agent_additional_networks` | Inspect an agent's persisted operator-approved Docker networks, current attachments, and whether reconciliation is needed. |
+| `set_agent_additional_networks` | Persist an allowlisted set of external Docker networks for an agent. The setting is enforced when the agent is next started or recreated. |
 | `call_user` | Place an outbound phone call to a user and hold a voice conversation. Server-gated: works only when VoIP is enabled platform-wide and the agent has a voice binding; rate-limited and daily-capped. See [VoIP Telephony](../advanced/voip-telephony.md). |
 | `share_file` | The agent drops a file into `/home/developer/public/` and calls this tool to mint a signed, expiring download URL (universal — works for web, Slack, Telegram, WhatsApp, email). |
 | `write_user_memory` | Per-user memory blob in an isolated store. Trinity resolves the user's email from `execution_id` server-side, so an agent cannot accidentally cross-write another user's memory. |

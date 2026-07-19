@@ -28,6 +28,14 @@ export interface AgentConfig {
   port?: number;  // SSH port - ui_port removed for security
   template?: string;
   source_branch?: string;  // Branch to track (default: main). Can also use github:owner/repo@branch syntax.
+  additional_networks?: string[];
+}
+
+export interface AgentAdditionalNetworks {
+  additional_networks: string[];
+  current_additional_networks?: string[];
+  restart_needed: boolean;
+  message?: string;
 }
 
 export interface ChatResponse {
@@ -46,6 +54,7 @@ export interface Template {
   display_name: string;
   description: string;
   mcp_servers: string[];
+  additional_networks?: string[];
   resources: {
     cpu: string;
     memory: string;

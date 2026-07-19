@@ -2770,6 +2770,16 @@ def _migrate_coordination_runs_tables(cursor, conn):
     print("Created coordination run tables")
 
 
+def _migrate_agent_ownership_additional_networks(cursor, conn):
+    """Persist approved external Docker networks per agent."""
+    cursor.execute("PRAGMA table_info(agent_ownership)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "additional_networks" not in columns:
+        cursor.execute("ALTER TABLE agent_ownership ADD COLUMN additional_networks TEXT")
+    conn.commit()
+    print("Added agent_ownership.additional_networks")
+
+
 MIGRATIONS = [
     ("agent_sharing", _migrate_agent_sharing_table),
     ("schedule_executions_observability", _migrate_schedule_executions_observability),
@@ -2857,4 +2867,5 @@ MIGRATIONS = [
     ("agent_ownership_public_channel_prompt", _migrate_agent_ownership_public_channel_prompt),
     ("public_chat_messages_sender", _migrate_public_chat_messages_sender),
     ("coordination_runs_tables", _migrate_coordination_runs_tables),
+    ("agent_ownership_additional_networks", _migrate_agent_ownership_additional_networks),
 ]

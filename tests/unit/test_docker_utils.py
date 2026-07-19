@@ -170,6 +170,32 @@ class TestVolumeOperations:
 
 
 @pytest.mark.unit
+class TestNetworkOperations:
+    """Test async Docker network wrappers."""
+
+    @pytest.mark.asyncio
+    async def test_network_get_calls_docker_sdk(self):
+        docker_utils, mock_docker_client = get_docker_utils()
+        mock_network = Mock()
+        mock_docker_client.networks.get = Mock(return_value=mock_network)
+
+        result = await docker_utils.network_get("project-network")
+
+        assert result == mock_network
+        mock_docker_client.networks.get.assert_called_once_with("project-network")
+
+    @pytest.mark.asyncio
+    async def test_network_connect_calls_docker_sdk(self):
+        docker_utils, _ = get_docker_utils()
+        mock_network = Mock()
+        mock_container = Mock()
+
+        await docker_utils.network_connect(mock_network, mock_container)
+
+        mock_network.connect.assert_called_once_with(mock_container)
+
+
+@pytest.mark.unit
 class TestContainerCreation:
     """Test async container creation wrapper."""
 

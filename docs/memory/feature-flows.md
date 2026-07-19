@@ -15,6 +15,7 @@
 
 | Date | ID | Change | Flow |
 |------|-----|--------|------|
+| 2026-07-19 | AGENT-NETWORKS-001 | feat(agent): persisted, operator-allowlisted external Docker networks restored across agent recreation | [agent-additional-networks.md](feature-flows/agent-additional-networks.md) |
 | 2026-07-18 | — | feat(orchestration): durable coordination runs correlate cross-agent executions and operator decisions, with replay-safe terminal events and agent-owned workflow semantics | [coordination-runs.md](feature-flows/coordination-runs.md) |
 | 2026-07-07 | #1500 | fix(ui): Tasks tab joins `FULLSCREEN_TABS` — task list flex-fills the viewport (old `max-h-96` cap becomes the `min-h-96` floor), panel root is the short-viewport fallback scroller; e2e fill/parity spec + `.first()` repair of the #954 spec broken by #1114's measuring mirror | [tasks-tab.md](feature-flows/tasks-tab.md) |
 | 2026-07-07 | trinity-enterprise#107 | feat: auto-seed a default **Cornelius** second-brain agent on fresh install with the Brain Orb enabled — bundled `local:cornelius` template (pre-generated seed graph so the orb renders immediately); first-run-only (durable `cornelius_seeded` flag) + fresh-install-scoped (`count_non_system_agents()`) `ensure_seeded()`; setup-completion BackgroundTask + `main.py` lifespan safety-net; local bundle ⇒ no upstream `origin` (durable ownership deferred to fork-to-own trinity-enterprise#109) | [cornelius-default-agent.md](feature-flows/cornelius-default-agent.md) |
@@ -61,6 +62,7 @@
 | Flow | Document | Description |
 |------|----------|-------------|
 | Agent Lifecycle | [agent-lifecycle.md](feature-flows/agent-lifecycle.md) | Create, start, stop, delete Docker containers |
+| Agent Additional Networks | [agent-additional-networks.md](feature-flows/agent-additional-networks.md) | Persisted, operator-allowlisted access to project-local Docker services (AGENT-NETWORKS-001) |
 | Default Cornelius Agent | [cornelius-default-agent.md](feature-flows/cornelius-default-agent.md) | Auto-seed a default Cornelius second-brain agent + enable the Brain Orb on fresh install; first-run-only, fresh-install-scoped `ensure_seeded()` (trinity-enterprise#107) |
 | Agent Rename | [agent-rename.md](feature-flows/agent-rename.md) | Rename agents via UI, MCP, or API (RENAME-001) |
 | Agent Terminal | [agent-terminal.md](feature-flows/agent-terminal.md) | Browser-based xterm.js terminal with Claude/Gemini/Bash modes |

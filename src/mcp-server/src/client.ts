@@ -6,6 +6,7 @@
 
 import type {
   Agent,
+  AgentAdditionalNetworks,
   AgentConfig,
   ChatResponse,
   ChatMessage,
@@ -284,6 +285,24 @@ export class TrinityClient {
    */
   async getAgent(name: string): Promise<Agent> {
     return this.request<Agent>("GET", `/api/agents/${encodeURIComponent(name)}`);
+  }
+
+  async getAgentAdditionalNetworks(name: string): Promise<AgentAdditionalNetworks> {
+    return this.request<AgentAdditionalNetworks>(
+      "GET",
+      `/api/agents/${encodeURIComponent(name)}/additional-networks`
+    );
+  }
+
+  async setAgentAdditionalNetworks(
+    name: string,
+    additionalNetworks: string[]
+  ): Promise<AgentAdditionalNetworks> {
+    return this.request<AgentAdditionalNetworks>(
+      "PUT",
+      `/api/agents/${encodeURIComponent(name)}/additional-networks`,
+      { additional_networks: additionalNetworks }
+    );
   }
 
   /**

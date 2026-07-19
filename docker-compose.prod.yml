@@ -122,6 +122,9 @@ services:
       # it must reach the backend here or the .env lever is inert (#1039 class).
       # Default (1800s) lives agent-side; 0/negative disables. Recreate to apply.
       - AGENT_TOOL_STALL_LIMIT_S=${AGENT_TOOL_STALL_LIMIT_S:-}
+      # Explicit external Docker networks agents may join (comma-separated).
+      # Empty is deny-all; Trinity internal and Docker built-in networks remain forbidden.
+      - AGENT_ADDITIONAL_NETWORK_ALLOWLIST=${AGENT_ADDITIONAL_NETWORK_ALLOWLIST:-}
       # #946 pull-pilot routing flag (observability mirror of the mcp-server gate).
       - MCP_AGENT_CHAT_PULL_ENABLED=${MCP_AGENT_CHAT_PULL_ENABLED:-false}
       # Correlated-failure / thundering-herd controls (#1085) — re-delivery

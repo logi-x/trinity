@@ -29,6 +29,14 @@ from .helpers import check_shared_folder_mounts_match, check_api_key_env_matches
 from services.agent_auth import derive_agent_token
 from .file_sharing import check_public_folder_mount_matches
 from .read_only import inject_read_only_hooks, remove_read_only_hooks
+from .networks import (
+    ADDITIONAL_NETWORKS_LABEL,
+    additional_networks_match,
+    connect_additional_networks,
+    preflight_additional_networks,
+    serialize_additional_networks_label,
+    validate_additional_networks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -258,8 +266,10 @@ async def start_agent_internal(agent_name: str) -> dict:
     await container_reload(container)
     was_already_running = getattr(container, "status", None) == "running"
     shared_folder_match = await check_shared_folder_mounts_match(container, agent_name)
+    desired_additional_networks = db.get_additional_networks(agent_name)
     needs_recreation = (
         not shared_folder_match or
+        not additional_networks_match(container, desired_additional_networks) or
         not check_public_folder_mount_matches(container, agent_name) or
         not check_api_key_env_matches(container, agent_name) or
         not check_github_pat_env_matches(container, agent_name) or
@@ -356,6 +366,17 @@ async def recreate_container_with_updated_config(agent_name: str, old_container,
     validate_base_image(image)
     env_vars = {e.split("=", 1)[0]: e.split("=", 1)[1] for e in old_config.get("Env", []) if "=" in e}
     labels = old_config.get("Labels", {})
+
+    # AGENT-NETWORKS-001: resolve policy and Docker existence before removing
+    # the old container. This keeps a revoked/missing project network from
+    # turning a configuration restart into destructive partial recreation.
+    additional_networks = validate_additional_networks(
+        db.get_additional_networks(agent_name)
+    )
+    await preflight_additional_networks(additional_networks)
+    labels[ADDITIONAL_NETWORKS_LABEL] = serialize_additional_networks_label(
+        additional_networks
+    )
 
     # #1098: redirect scratch (pip/npm/build) off the 100 MB noexec /tmp tmpfs
     # onto the disk-backed home volume. setdefault so a template/user-set TMPDIR
@@ -609,6 +630,8 @@ async def recreate_container_with_updated_config(agent_name: str, old_container,
         # and leaves NanoCpus=0 on Linux, so the CPU limit was never enforced.
         nano_cpus=int(cpu) * 1_000_000_000,
     )
+
+    await connect_additional_networks(new_container, additional_networks)
 
     logger.info(f"Recreated container for agent {agent_name} with updated configuration")
     return new_container

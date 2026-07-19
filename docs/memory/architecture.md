@@ -1088,6 +1088,7 @@ CREATE TABLE agent_ownership (
     autonomy_enabled INTEGER DEFAULT 0,
     memory_limit TEXT,
     cpu_limit TEXT,
+    additional_networks TEXT,                      -- AGENT-NETWORKS-001: JSON list of approved external networks
     full_capabilities INTEGER DEFAULT 0,
     read_only_mode INTEGER DEFAULT 0,
     read_only_config TEXT,
@@ -1865,7 +1866,7 @@ Two Docker bridge networks, by design — agents physically cannot route to Redi
 
 Bridges (members of **both** networks): `backend` (primary HTTP API — Redis on platform side, agents on agent side), `mcp-server` (agents reach `http://mcp-server:8080/mcp` via Docker DNS), `otel-collector` (agents push metrics), `cloudflared` (prod only — proxies to backend and public agents).
 
-**Rule:** agents are *never* on `trinity-platform-network`. Any new service that mounts the agent network must NOT connect to Redis — full stop. The agent-creation sites (`services/agent_service/crud.py:583`, `services/agent_service/lifecycle.py:495`, `services/system_agent_service.py:238`) hard-code the network name `trinity-agent-network`.
+**Rule:** agents are *never* on `trinity-platform-network`. Any new service that mounts the agent network must NOT connect to Redis — full stop. Agent creation always uses `trinity-agent-network` as the primary network. AGENT-NETWORKS-001 may additionally attach an agent to named external project networks only when each name is persisted for that agent and explicitly present in the backend's `AGENT_ADDITIONAL_NETWORK_ALLOWLIST`; Docker built-ins and both Trinity-internal networks are rejected. Create/recreate preflight network existence and lifecycle reconciliation restores the desired set.
 
 **Redis ACL users:**
 

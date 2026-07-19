@@ -59,6 +59,12 @@ description: "What this agent does"
 resources:
   cpu: "2"                        # CPU cores (string)
   memory: "4g"                    # Memory limit (e.g., "2g", "4g", "8g")
+
+# Optional project-service networks. Every name must also appear in the
+# Trinity backend's AGENT_ADDITIONAL_NETWORK_ALLOWLIST; otherwise creation is
+# rejected. Docker built-ins and Trinity internal networks cannot be listed.
+additional_networks:
+  - my-project-shared-network
 ```
 
 See [template.yaml Schema](#templateyaml-schema) for complete field reference.
@@ -287,6 +293,11 @@ description: |
 resources:
   cpu: "2"                        # CPU cores (string)
   memory: "4g"                    # Memory limit (e.g., "2g", "4g", "8g")
+
+# Optional private project-service networks. The Trinity operator must include
+# every name in AGENT_ADDITIONAL_NETWORK_ALLOWLIST before this template is used.
+additional_networks:
+  - my-project-shared-network
 
 # === RUNTIME CONFIGURATION (Optional) ===
 # Defaults to Claude Code if not specified

@@ -167,6 +167,7 @@ def _build_template(repo: str, metadata: dict, admin_override: dict = None) -> d
         # untrusted and could set `priority: "high"`, which would 500 the sort.
         "priority": _coerce_priority(metadata.get("priority")),
         "resources": metadata.get("resources", {"cpu": "2", "memory": "4g"}),
+        "additional_networks": metadata.get("additional_networks", []),
         "skills": metadata.get("skills", []),
         "mcp_servers": metadata.get("mcp_servers", []),
         "required_credentials": metadata.get("required_credentials", []),
@@ -248,6 +249,7 @@ def _build_local_template(template_dir: Path) -> Optional[dict]:
         # exclusion. (#1513)
         "hidden": bool(data.get("hidden", False)),
         "resources": data.get("resources", {"cpu": "2", "memory": "4g"}),
+        "additional_networks": data.get("additional_networks", []),
         "skills": data.get("skills", []),
         "mcp_servers": list(data.get("credentials", {}).get("mcp_servers", {}).keys())
             or data.get("mcp_servers", []),

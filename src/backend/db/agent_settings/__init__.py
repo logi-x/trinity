@@ -11,6 +11,7 @@ Each module provides a mixin class that AgentOperations inherits from:
 - GitPATMixin: Per-agent GitHub PAT management (#347)
 - FileSharingMixin: Per-agent outbound file-sharing toggle (FILES-001)
 - McpExposureMixin: Per-agent MCP-exposure toggle (#846)
+- NetworksMixin: Additional Docker network attachments (AGENT-NETWORKS-001)
 """
 
 from .sharing import SharingMixin
@@ -24,6 +25,7 @@ from .git_pat import GitPATMixin
 from .file_sharing import FileSharingMixin
 from .mcp_exposure import McpExposureMixin
 from .tts import TtsMixin
+from .networks import NetworksMixin
 
 __all__ = [
     'SharingMixin',
@@ -37,4 +39,5 @@ __all__ = [
     'FileSharingMixin',
     'McpExposureMixin',
     'TtsMixin',
+    'NetworksMixin',
 ]

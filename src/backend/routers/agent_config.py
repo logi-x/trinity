@@ -1,7 +1,12 @@
 """Per-agent configuration endpoints: api-key, autonomy, read-only, resources, capabilities, capacity, timeout."""
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from models import User, AgentCapacityUpdate, PublicChannelModelUpdate
+from models import (
+    User,
+    AgentAdditionalNetworksUpdate,
+    AgentCapacityUpdate,
+    PublicChannelModelUpdate,
+)
 from database import db
 from dependencies import get_current_user, AuthorizedAgentByName
 from services import settings_service
@@ -13,8 +18,75 @@ from services.agent_service import (
     set_autonomy_status_logic,
 )
 from services.platform_audit_service import platform_audit_service, AuditEventType
+from services.agent_service.networks import (
+    additional_networks_match,
+    attached_additional_networks,
+    preflight_additional_networks,
+    validate_additional_networks,
+)
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
+
+
+# ============================================================================
+# Additional Docker Networks (AGENT-NETWORKS-001)
+# ============================================================================
+
+@router.get("/{agent_name}/additional-networks")
+async def get_agent_additional_networks(agent_name: AuthorizedAgentByName):
+    """Return desired and currently applied external Docker networks."""
+    container = get_agent_container(agent_name)
+    if not container:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    desired = db.get_additional_networks(agent_name)
+    return {
+        "additional_networks": desired,
+        "current_additional_networks": attached_additional_networks(container),
+        "restart_needed": not additional_networks_match(container, desired),
+    }
+
+
+@router.put("/{agent_name}/additional-networks")
+async def set_agent_additional_networks(
+    agent_name: str,
+    body: AgentAdditionalNetworksUpdate,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """Persist an owner-approved external network set for the next restart."""
+    if not db.can_user_share_agent(current_user.username, agent_name):
+        raise HTTPException(
+            status_code=403,
+            detail="Only owners can change additional networks",
+        )
+    container = get_agent_container(agent_name)
+    if not container:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    desired = validate_additional_networks(body.additional_networks)
+    await preflight_additional_networks(desired)
+    previous = db.get_additional_networks(agent_name)
+    if not db.set_additional_networks(agent_name, desired):
+        raise HTTPException(status_code=500, detail="Failed to persist additional networks")
+
+    restart_needed = not additional_networks_match(container, desired)
+    await platform_audit_service.log(
+        event_type=AuditEventType.CONFIGURATION,
+        event_action="additional_networks",
+        source="api",
+        actor_user=current_user,
+        actor_ip=request.client.host if request.client else None,
+        target_type="agent",
+        target_id=agent_name,
+        endpoint=str(request.url.path),
+        request_id=getattr(request.state, "request_id", None),
+        details={"previous": previous, "additional_networks": desired},
+    )
+    return {
+        "message": "Additional networks updated",
+        "additional_networks": desired,
+        "restart_needed": restart_needed,
+    }
 
 
 # ============================================================================
