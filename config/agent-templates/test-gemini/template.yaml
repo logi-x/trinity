@@ -24,13 +24,11 @@ capabilities:
   - google-search-integration
   - large-context  # 1M tokens
 
-commands: []
+commands:
+  - name: /test
+    description: Test command to verify Gemini runtime is working
 
 mcp_servers: []
 
 credentials: {}
-
-slash_commands:
-  - name: /test
-    description: Test command to verify Gemini runtime is working
 

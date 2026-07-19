@@ -359,13 +359,12 @@ const getItemDescription = (item) => {
   return item?.description || null
 }
 
-/** Prefill text for chat: optional usage, else "/{name}". */
+/** Prefill text for chat: optional usage, else name as-is (name includes /). */
 const getCommandPrefill = (command) => {
-  if (typeof command === 'string') return `/${command}`
+  if (typeof command === 'string') return command
   const usage = typeof command?.usage === 'string' ? command.usage.trim() : ''
   if (usage) return usage
-  const name = getItemName(command)
-  return name ? `/${name}` : ''
+  return getItemName(command) || ''
 }
 
 const formatCapability = (capability) => {

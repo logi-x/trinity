@@ -345,12 +345,13 @@ sub_agents:
   - name: another-agent
     description: "Another sub-agent description"
 
-# Slash commands with descriptions
+# Slash commands with descriptions (name is the chat prefill when usage omitted)
 commands:
-  - name: my-command
+  - name: /my-command
     description: "What this command does"
-  - name: another-command
+  - name: /another-command
     description: "Another command description"
+    usage: "/another-command [arg]"
 
 # MCP servers with descriptions (for Info tab display)
 mcp_servers:

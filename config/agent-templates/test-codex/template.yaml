@@ -23,7 +23,9 @@ capabilities:
   - code-generation
   - web-search
   
-commands: []
+commands:
+  - name: /test
+    description: Test command to verify the Codex runtime is working
 
 mcp_servers: []
 
@@ -32,7 +34,3 @@ mcp_servers: []
 credentials:
   env_file:
     - OPENAI_API_KEY
-
-slash_commands:
-  - name: /test
-    description: Test command to verify the Codex runtime is working

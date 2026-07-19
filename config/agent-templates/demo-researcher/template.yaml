@@ -28,9 +28,9 @@ shared_folders:
   consume: false
 
 commands:
-  - name: research
+  - name: /research
     description: Run a research cycle on trending topics
-  - name: status
+  - name: /status
     description: Report on recent research activity
 
 # Default schedule (can be overridden in manifest)

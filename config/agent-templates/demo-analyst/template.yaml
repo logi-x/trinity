@@ -31,13 +31,13 @@ shared_folders:
   consume: true
 
 commands:
-  - name: briefing
+  - name: /briefing
     description: Generate daily briefing from research findings
-  - name: opportunities
+  - name: /opportunities
     description: List and rank all identified opportunities
-  - name: ask
+  - name: /ask
     description: Answer a strategic question using accumulated research
-  - name: request-research
+  - name: /request-research
     description: Ask the researcher to investigate a specific topic
 
 schedules:

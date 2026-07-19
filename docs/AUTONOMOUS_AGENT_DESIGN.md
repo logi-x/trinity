@@ -172,7 +172,7 @@ capabilities:
   - alerting
   - reporting
 
-slash_commands:
+commands:
   - name: /health-check
     description: Check fleet health and report issues
   - name: /cost-report

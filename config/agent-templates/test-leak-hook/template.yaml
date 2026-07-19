@@ -1,4 +1,4 @@
-name: Test Subprocess-Leak Hook
+name: test-leak-hook
 # Excluded from the user-facing template catalog (GET /api/templates). See README "Not starting points". (#1513)
 hidden: true
 display_name: Test Leak Hook
