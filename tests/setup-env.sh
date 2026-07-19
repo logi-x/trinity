@@ -11,7 +11,11 @@
 # - INTERNAL_API_SECRET / SECRET_KEY: used by /api/internal/* tests for
 #   scheduler/agent-server callback authentication.
 
-DOTENV="$(dirname "$0")/../.env"
+# Prefer BASH_SOURCE when sourced (so $0 is not the caller); fall back for sh.
+_SETUP_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+_REPO_ROOT="$(cd "$_SETUP_ENV_DIR/.." && pwd)"
+
+DOTENV="$_REPO_ROOT/.env"
 if [ -f "$DOTENV" ]; then
     ADMIN_PW="$(grep ^ADMIN_PASSWORD "$DOTENV" | cut -d= -f2-)"
     [ -n "$ADMIN_PW" ] && export TRINITY_TEST_PASSWORD="${TRINITY_TEST_PASSWORD:-$ADMIN_PW}"
@@ -32,4 +36,4 @@ fi
 # import guard makes this a no-op once installed; editable installs reflect
 # src/cli edits live, so there's no reinstall churn.
 python -c "import trinity_cli" 2>/dev/null \
-    || pip install -q -e "$(dirname "$0")/../src/cli"
+    || pip install -q -e "$_REPO_ROOT/src/cli"

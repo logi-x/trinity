@@ -5,10 +5,11 @@
 
 set -e
 
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 source .venv/bin/activate
 # Pull TRINITY_TEST_PASSWORD / REDIS_BACKEND_PASSWORD from project .env.
-source "$(dirname "$0")/setup-env.sh"
+source "$SCRIPT_DIR/setup-env.sh"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
