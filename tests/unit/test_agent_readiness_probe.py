@@ -63,6 +63,7 @@ def wait_for_agent_ready(monkeypatch):
             check_full_capabilities_match=None,
             check_guardrails_env_matches=None,
             check_agent_auth_token_env_matches=None,  # added to lifecycle.py import (#1159)
+            check_agent_name_env_matches=None,  # AGENT_NAME sync on recreate/start
             is_claude_runtime=None,  # added to lifecycle.py import (#1187)
         ),
         "services.settings_service": types.SimpleNamespace(
@@ -71,6 +72,10 @@ def wait_for_agent_ready(monkeypatch):
             get_agent_default_resources=None,  # added to lifecycle.py import (#725)
         ),
         "services.skill_service": types.SimpleNamespace(skill_service=None),
+        "services.agent_auth": types.SimpleNamespace(derive_agent_token=None),
+        "services.agent_service.file_sharing": types.SimpleNamespace(
+            check_public_folder_mount_matches=None,
+        ),
     }
     for name, mod in stubs.items():
         monkeypatch.setitem(sys.modules, name, mod)

@@ -43,8 +43,8 @@ def _is_future(dt):
 
 
 def _insert(db_path, sid, agent, *, cron="0 4 * * *", enabled=1,
-            next_run_at=PAST, autonomy=1, timezone="UTC"):
-    now = datetime.utcnow().isoformat()
+            next_run_at=PAST, autonomy=1, tz_name="UTC"):
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT OR REPLACE INTO agent_ownership(agent_name,owner_id,autonomy_enabled,created_at)"
@@ -52,7 +52,7 @@ def _insert(db_path, sid, agent, *, cron="0 4 * * *", enabled=1,
     conn.execute(
         "INSERT INTO agent_schedules(id,agent_name,name,cron_expression,message,enabled,"
         "timezone,owner_id,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        (sid, agent, "Sched", cron, "do it", enabled, timezone, 1, now, now,
+        (sid, agent, "Sched", cron, "do it", enabled, tz_name, 1, now, now,
          next_run_at.isoformat()))
     conn.commit()
     conn.close()
@@ -157,7 +157,7 @@ async def test_a3_permanent_add_failure_bounded(svc, initialized_db):
     sync — otherwise A3 becomes a forever error-log storm."""
     svc.initialize()
     try:
-        _insert(initialized_db, "s6", "a6", next_run_at=PAST, timezone="Not/AZone")
+        _insert(initialized_db, "s6", "a6", next_run_at=PAST, tz_name="Not/AZone")
         with patch.object(svc, "_add_job", wraps=svc._add_job) as spy:
             await svc._sync_agent_schedules()
             await svc._sync_agent_schedules()
@@ -192,7 +192,7 @@ async def test_a4_missed_detection_non_utc(svc, initialized_db):
     kiev = pytz.timezone("Europe/Kiev")
     now_utc = datetime.now(pytz.utc)
     missed_next = (now_utc - timedelta(minutes=30)).astimezone(kiev)  # 30m ago, Kiev-rendered
-    _insert(initialized_db, "s8", "a8", timezone="Europe/Kiev", next_run_at=missed_next)
+    _insert(initialized_db, "s8", "a8", tz_name="Europe/Kiev", next_run_at=missed_next)
     conn = sqlite3.connect(initialized_db)
     conn.execute("UPDATE agent_schedules SET last_run_at=? WHERE id='s8'",
                  ((now_utc - timedelta(hours=2)).isoformat(),))

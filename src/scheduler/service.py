@@ -9,7 +9,7 @@ import asyncio
 import logging
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, List, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -85,7 +85,7 @@ class SchedulerService:
         self._redis: Optional[redis.Redis] = None
         self._initialized = False
         self._start_time: Optional[datetime] = None
-        self._instance_id: str = f"scheduler-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        self._instance_id: str = f"scheduler-{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d%H%M%S')}"
 
         # Schedule state snapshots for sync detection
         # Maps schedule_id -> (enabled, updated_at_iso)
@@ -165,7 +165,7 @@ class SchedulerService:
         # Start the scheduler
         self.scheduler.start()
         self._initialized = True
-        self._start_time = datetime.utcnow()
+        self._start_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
         logger.info(f"Scheduler initialized with {len(schedules)} agent schedules, {len(process_schedules)} process schedules")
         logger.info(f"Instance ID: {self._instance_id}")
@@ -278,7 +278,7 @@ class SchedulerService:
 
         sync_interval = config.schedule_reload_interval
         heartbeat_interval = 30
-        last_sync = datetime.utcnow()
+        last_sync = datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             # Keep the service running with periodic heartbeat and sync
@@ -286,7 +286,7 @@ class SchedulerService:
                 self.lock_manager.set_heartbeat(self._instance_id)
 
                 # Check if it's time to sync schedules
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
                 if (now - last_sync).total_seconds() >= sync_interval:
                     await self._sync_schedules()
                     last_sync = now
@@ -826,7 +826,7 @@ class SchedulerService:
         # (success + dispatched) and covers the failure and dispatch-exception
         # paths, which previously left next_run_at stale. Placed after the
         # create_execution guard so a genuine INSERT failure doesn't advance.
-        _fire_now = datetime.utcnow()
+        _fire_now = datetime.now(timezone.utc).replace(tzinfo=None)
         _fire_next = self._get_next_run_time(schedule.cron_expression, schedule.timezone)
         self.db.update_schedule_run_times(schedule.id, last_run_at=_fire_now, next_run_at=_fire_next)
 
@@ -873,7 +873,7 @@ class SchedulerService:
             logger.info(
                 f"Schedule {schedule.name} skipped by pre-check: {reason}"
             )
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             next_run = self._get_next_run_time(
                 schedule.cron_expression, schedule.timezone
             )
@@ -1409,7 +1409,7 @@ class SchedulerService:
                 logger.info(f"Rate limit detected, using 2x delay: {retry_delay}s")
 
         # Schedule the retry
-        retry_at = datetime.utcnow() + timedelta(seconds=retry_delay)
+        retry_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=retry_delay)
 
         logger.info(
             f"Scheduling retry for execution {execution.id} "
@@ -1545,7 +1545,7 @@ class SchedulerService:
 
         logger.info(f"Recovering {len(pending)} pending retries after restart")
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         for execution in pending:
             schedule = self.db.get_schedule(execution.schedule_id)
             if not schedule or not schedule.enabled:
@@ -1699,7 +1699,7 @@ class SchedulerService:
                 UPDATE schedule_executions
                 SET business_status = ?, validated_at = ?
                 WHERE id = ?
-            """, (business_status, datetime.utcnow().isoformat(), execution_id))
+            """, (business_status, datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), execution_id))
             conn.commit()
 
     # =========================================================================
@@ -1891,7 +1891,7 @@ class SchedulerService:
                     )
 
                     # Update schedule last run time
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc).replace(tzinfo=None)
                     next_run = self._get_next_run_time(schedule.cron_expression, schedule.timezone)
                     self.db.update_process_schedule_run_times(schedule.id, last_run_at=now, next_run_at=next_run)
 
@@ -2016,17 +2016,17 @@ class SchedulerService:
             return SchedulerStatus(
                 running=False,
                 jobs_count=0,
-                last_check=datetime.utcnow(),
+                last_check=datetime.now(timezone.utc).replace(tzinfo=None),
                 uptime_seconds=0
             )
 
         jobs = self.scheduler.get_jobs()
-        uptime = (datetime.utcnow() - self._start_time).total_seconds() if self._start_time else 0
+        uptime = (datetime.now(timezone.utc).replace(tzinfo=None) - self._start_time).total_seconds() if self._start_time else 0
 
         return SchedulerStatus(
             running=self.scheduler.running,
             jobs_count=len(jobs),
-            last_check=datetime.utcnow(),
+            last_check=datetime.now(timezone.utc).replace(tzinfo=None),
             uptime_seconds=uptime,
             jobs=[
                 {

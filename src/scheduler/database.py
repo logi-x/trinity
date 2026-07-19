@@ -11,7 +11,7 @@ import secrets
 import sqlite3
 import logging
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from .config import config
@@ -386,7 +386,7 @@ class SchedulerDatabase:
             retry_of_execution_id: Original execution ID for retries (RETRY-001)
         """
         execution_id = self._generate_id()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -447,7 +447,7 @@ class SchedulerDatabase:
             ScheduleExecution with status='skipped', or None on failure
         """
         execution_id = self._generate_id()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -511,7 +511,7 @@ class SchedulerDatabase:
                 return False
 
             started_at = datetime.fromisoformat(row["started_at"])
-            completed_at = datetime.utcnow()
+            completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             duration_ms = int((completed_at - started_at).total_seconds() * 1000)
 
             cursor.execute("""
@@ -795,7 +795,7 @@ class SchedulerDatabase:
     ) -> Optional[ProcessSchedule]:
         """Create a new process schedule."""
         schedule_id = self._generate_id()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -893,7 +893,7 @@ class SchedulerDatabase:
     ) -> Optional[ProcessScheduleExecution]:
         """Create a new process schedule execution record."""
         execution_id = self._generate_id()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -949,7 +949,7 @@ class SchedulerDatabase:
             ProcessScheduleExecution with status='skipped', or None on failure
         """
         execution_id = self._generate_id()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -1007,7 +1007,7 @@ class SchedulerDatabase:
                 return False
 
             started_at = datetime.fromisoformat(row["started_at"])
-            completed_at = datetime.utcnow()
+            completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             duration_ms = int((completed_at - started_at).total_seconds() * 1000)
 
             cursor.execute("""

@@ -4,13 +4,29 @@ Pydantic models for the Trinity backend API.
 import json
 import re
 
-from pydantic import BaseModel, EmailStr, Field, SecretStr, field_validator, model_validator
-from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer, SecretStr, field_validator, model_validator
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from datetime import datetime
 from enum import Enum
 
 from utils.helpers import to_utc_iso
 from db_models import WebFileUpload  # noqa: F401 — re-exported for router imports
+
+
+def _serialize_utc_iso(v: Optional[datetime]) -> Optional[str]:
+    return to_utc_iso(v) if v else None
+
+
+# Pydantic v2 replacement for class Config.json_encoders[datetime] — emits
+# ISO-8601 with a trailing Z for frontend compatibility (#json_encoders removed).
+UtcDateTime = Annotated[
+    datetime,
+    PlainSerializer(_serialize_utc_iso, return_type=Optional[str], when_used="json"),
+]
+OptionalUtcDateTime = Annotated[
+    Optional[datetime],
+    PlainSerializer(_serialize_utc_iso, return_type=Optional[str], when_used="json"),
+]
 
 
 # Fork-to-own destination: "owner/name". Owner per GitHub rules (alphanumeric +
@@ -92,18 +108,12 @@ class AgentStatus(BaseModel):
     type: str
     status: str
     port: int  # SSH port only - UI no longer exposed externally
-    created: datetime
+    created: UtcDateTime
     resources: dict
     container_id: Optional[str] = None
     template: Optional[str] = None
     runtime: Optional[str] = "claude-code"  # "claude-code" or "gemini-cli"
     base_image_version: Optional[str] = None  # Version of trinity-agent-base image
-
-    class Config:
-        json_encoders = {
-            # Use to_utc_iso to ensure 'Z' suffix for frontend compatibility
-            datetime: lambda v: to_utc_iso(v) if v else None
-        }
 
 
 class User(BaseModel):
@@ -240,8 +250,7 @@ class Activity(BaseModel):
     error: Optional[str] = None
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ============================================================================
@@ -318,8 +327,7 @@ class ReportSummary(BaseModel):
     period_end: Optional[str] = None
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class Report(ReportSummary):
@@ -429,15 +437,9 @@ class Execution(BaseModel):
     source_user_id: Optional[str] = None       # User who triggered
     source_user_email: Optional[str] = None    # User email for tracking
     message: str                               # The chat message
-    queued_at: datetime
-    started_at: Optional[datetime] = None
+    queued_at: UtcDateTime
+    started_at: OptionalUtcDateTime = None
     status: QueueItemStatus = QueueItemStatus.QUEUED
-
-    class Config:
-        json_encoders = {
-            # Use to_utc_iso to ensure 'Z' suffix for frontend compatibility
-            datetime: lambda v: to_utc_iso(v) if v else None
-        }
 
 
 class QueueStatus(BaseModel):
@@ -769,8 +771,8 @@ class FleetExecutionSummary(BaseModel):
     schedule_id: str
     agent_name: str
     status: str
-    started_at: datetime
-    completed_at: Optional[datetime] = None
+    started_at: UtcDateTime
+    completed_at: OptionalUtcDateTime = None
     duration_ms: Optional[int] = None
     message: str
     triggered_by: str
@@ -787,11 +789,9 @@ class FleetExecutionSummary(BaseModel):
     fan_out_id: Optional[str] = None
     business_status: Optional[str] = None
     validation_execution_id: Optional[str] = None
-    queued_at: Optional[datetime] = None
+    queued_at: OptionalUtcDateTime = None
 
-    class Config:
-        from_attributes = True
-        json_encoders = {datetime: lambda v: to_utc_iso(v) if v else None}
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FleetExecutionStats(BaseModel):
@@ -2044,8 +2044,7 @@ class ScheduleResponse(BaseModel):
     validation_prompt: Optional[str] = None
     validation_timeout_seconds: int = 120
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ExecutionSummary(BaseModel):
@@ -2091,8 +2090,7 @@ class ExecutionSummary(BaseModel):
     # - tool_calls: Optional[str]    # JSON array of tool calls
     # - execution_log: Optional[str] # Full Claude Code transcript
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ExecutionResponse(BaseModel):
@@ -2137,8 +2135,7 @@ class ExecutionResponse(BaseModel):
     # Auto-compact observability (Bundle B)
     compact_metadata: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WebhookStatusResponse(BaseModel):

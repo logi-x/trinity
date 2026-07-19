@@ -71,3 +71,6 @@ opentelemetry-instrumentation-redis==0.50b0
 psutil==6.1.1
 python-magic==0.4.27
 audioop-lts; python_version >= '3.13'
+# IANA tz DB for zoneinfo (and as backup when system tzdata is absent).
+# Needed for schedule validation / APScheduler non-UTC zones in slim images.
+tzdata==2025.2

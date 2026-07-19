@@ -7,8 +7,12 @@ WORKDIR /app
 # token in main.py) never reaches `docker logs`. Matches docker/scheduler/Dockerfile.
 ENV PYTHONUNBUFFERED=1
 
-# Install curl for healthcheck, git for GitHub cloning, libmagic for file type detection
-RUN apt-get update && apt-get install -y --no-install-recommends curl git libmagic1 ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install curl for healthcheck, git for GitHub cloning, libmagic for file type
+# detection, tzdata for IANA zones (pytz/zoneinfo; slim images omit it and
+# Europe/Kiev etc. fail schedule validation / CronTrigger).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl git libmagic1 ffmpeg tzdata \
+    && rm -rf /var/lib/apt/lists/*
 
 # Build-time provenance (#926). Each arg is forwarded by docker-compose
 # `backend.build.args` from shell vars set by `scripts/deploy/start.sh`.

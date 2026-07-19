@@ -63,6 +63,31 @@ logger = logging.getLogger(__name__)
 # orphan defense degrades.
 _CGROUP_PROCS_PATH = Path("/sys/fs/cgroup/cgroup.procs")
 
+# Host / WSL / Cursor-agent shells often expose a readable cgroup.procs that
+# lists the *user session*, not a container. Sweeping that SIGKILLs unrelated
+# PIDs (including the IDE's WSL agent shell). Only run the real sweep when we
+# are clearly inside a container runtime.
+_DOCKERENV = Path("/.dockerenv")
+
+
+def running_in_container() -> bool:
+    """True when this process is inside a Docker/Podman-style container.
+
+    Used as a safety gate for :func:`kill_cgroup_orphans`. Pytest on a WSL
+    host must never treat the session cgroup as a container boundary.
+    """
+    if _DOCKERENV.exists():
+        return True
+    try:
+        text = Path("/proc/self/cgroup").read_text()
+    except OSError:
+        return False
+    # cgroup v1/v2 path markers used by Docker, containerd, and Podman.
+    return any(
+        marker in text
+        for marker in ("/docker/", "/containerd/", "/libpod-", "/podman/")
+    )
+
 
 # Cap the per-sweep log volume. A truly broken container could have
 # dozens of orphans; we log each one's identity up to this cap then a
@@ -130,12 +155,19 @@ def kill_cgroup_orphans(
             send SIGKILL. Used by the canary mode and tests.
 
     Returns the number of PIDs the sweep would kill (or did kill).
-    Returns 0 on cgroup-unavailable hosts; the sweep is a no-op there
-    and the legacy pgid SIGTERM/SIGKILL in :mod:`subprocess_pgroup`
-    remains the only cleanup, matching pre-#817 behavior for those
-    environments.
+    Returns 0 on cgroup-unavailable hosts, or when not running inside a
+    container (host/WSL pytest must never sweep the session cgroup); the
+    legacy pgid SIGTERM/SIGKILL in :mod:`subprocess_pgroup` remains the
+    only cleanup there, matching pre-#817 behavior for those environments.
     """
     sweep_pid = sweep_pid if sweep_pid is not None else os.getpid()
+
+    if not running_in_container():
+        logger.debug(
+            "[OrphanSweep] not in a container — skipping cgroup sweep "
+            "(refusing to treat the host/session cgroup as a kill boundary)"
+        )
+        return 0
 
     cgroup_pids = read_cgroup_procs()
     if cgroup_pids is None:
@@ -205,12 +237,16 @@ def kill_cgroup_orphans(
 
 
 def cgroup_available() -> bool:
-    """Return True iff the cgroup v2 procs file is readable.
+    """Return True iff the cgroup v2 procs file is readable **and** we are
+    inside a container (so a sweep would be safe to run).
 
     Cheaper than running a full sweep when callers just want to know
     whether the new mechanism is active. Used by startup logging and
-    by tests that should be skipped in environments without cgroup v2.
+    by tests that should be skipped in environments without cgroup v2
+    or outside containers (host/WSL).
     """
+    if not running_in_container():
+        return False
     try:
         with open(_CGROUP_PROCS_PATH) as f:
             f.read(1)

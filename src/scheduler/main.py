@@ -15,7 +15,7 @@ import asyncio
 import logging
 import signal
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
@@ -242,7 +242,7 @@ class SchedulerApp:
 
         sync_interval = config.schedule_reload_interval
         heartbeat_interval = 30
-        last_sync = datetime.utcnow()
+        last_sync = datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             # Heartbeat and sync loop
@@ -254,7 +254,7 @@ class SchedulerApp:
                     )
 
                     # Check if it's time to sync schedules
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc).replace(tzinfo=None)
                     if (now - last_sync).total_seconds() >= sync_interval:
                         await self.scheduler_service._sync_schedules()
                         last_sync = now

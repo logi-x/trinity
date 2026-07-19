@@ -12,4 +12,5 @@ markers = [
     "requires_agent: test requires a running agent",
     "unit: unit tests that don't need backend",
     "integration: mark test as integration test",
+    "real_cgroup_sweep: allow live cgroup orphan sweep (container CI only)",
 ]

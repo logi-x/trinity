@@ -53,6 +53,20 @@ from subprocess_pgroup import (  # noqa: E402
 # module (tests/unit/test_orphan_sweep.py).
 
 
+@pytest.fixture(autouse=True)
+def _noop_cgroup_sweep_on_host(monkeypatch, request):
+    """Never run a real host/session cgroup sweep from this module.
+
+    ``kill_cgroup_orphans`` is gated to containers in production code, but
+    several drain tests historically called the live sweep. On WSL that
+    SIGKILLed Cursor's agent shell. Always no-op here unless the test
+    opts in with ``@pytest.mark.real_cgroup_sweep`` (container CI only).
+    """
+    if request.node.get_closest_marker("real_cgroup_sweep"):
+        return
+    monkeypatch.setattr(subprocess_pgroup, "kill_cgroup_orphans", lambda *a, **k: 0)
+
+
 # ---------------------------------------------------------------------------
 # Harness: a parent process that forks a grandchild which keeps stderr open
 # after the parent exits. Mirrors the production pattern where claude spawns
@@ -397,9 +411,10 @@ sys.exit(0)
             except Exception:
                 pass
 
+    @pytest.mark.real_cgroup_sweep
     @pytest.mark.skipif(
         sys.platform != "linux",
-        reason="_kill_orphan_pipe_writers uses /proc (Linux only)",
+        reason="cgroup sweep uses /proc + /sys/fs/cgroup (Linux only)",
     )
     def test_setsid_escapee_drained_via_orphan_killer_preserves_result_line(self):
         """Regression for #586: Stop hook → ``git push`` → ``ssh`` calls
@@ -408,7 +423,7 @@ sys.exit(0)
 
         Pathology: terminate_process_group(claude_pgid) leaves the setsid'd
         grandchild alive (different session), so the reader's readline() never
-        sees EOF. Without ``_kill_orphan_pipe_writers`` firing inside
+        sees EOF. Without the cgroup orphan sweep inside
         ``drain_reader_threads``, the natural-drain wait times out and the
         force-close fallback discards the kernel pipe buffer — losing the
         final ``{"type":"result"}`` JSON line and recording the execution as a
@@ -420,12 +435,16 @@ sys.exit(0)
         natural-drain ordering, the 10s scan-timeout cap (#650), the async
         wrapper (#657), and the result-line preservation contract (#531).
 
-        Non-redundant with ``TestKillOrphanPipeWriters.test_kills_orphan_in_different_session``:
-        that test calls ``_kill_orphan_pipe_writers`` directly and skips the
-        drain wrapper entirely; only this test exercises the full
-        ``drain_reader_threads`` production path with the setsid escape +
-        data-preservation assertion.
+        Marked ``real_cgroup_sweep``: must run inside a container. On host/WSL
+        the sweep is gated off (and other tests no-op it) so we never SIGKILL
+        the session cgroup / Cursor agent shell during pytest.
         """
+        from orphan_sweep import cgroup_available
+        if not cgroup_available():
+            pytest.skip(
+                "cgroup orphan sweep inactive outside containers "
+                "(host/WSL safety gate)"
+            )
         # Parent writes the result sentinel, forks a grandchild that calls
         # setsid() (new session — survives terminate_process_group(pgid)) and
         # holds stdout open, then exits immediately.
