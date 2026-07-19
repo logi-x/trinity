@@ -5,6 +5,8 @@ tagline: Know thy enemy
 version: "1.0.0"
 author: Logix
 
+type: competitor-agent
+
 avatar_prompt: A sharp competitive strategist in a dark suit, studying a wall of competitor profiles and market maps, intense focused gaze, modern war-room setting with screens and charts
 
 resources:
@@ -26,6 +28,8 @@ use_cases:
 shared_folders:
   expose: true
   consume: true
+
+commands: []
 
 metrics:
   - name: competitors_analyzed

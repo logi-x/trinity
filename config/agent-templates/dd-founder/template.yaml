@@ -5,6 +5,8 @@ tagline: Trust but verify
 version: "1.0.0"
 author: Logix
 
+type: founder-agent
+
 resources:
   cpu: "2"
   memory: "4g"
@@ -24,6 +26,8 @@ use_cases:
 shared_folders:
   expose: true
   consume: true
+
+commands: []
 
 metrics:
   - name: founders_researched

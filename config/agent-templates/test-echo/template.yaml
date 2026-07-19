@@ -6,11 +6,18 @@ description: Simple echo agent for testing basic chat functionality
 version: "1.0.0"
 author: Logix Platform
 
+type: business-assistant
+
 resources:
   cpu: "1"
   memory: "2g"
 
 mcp_servers: []
+
+commands: []
+
+capabilities:
+  - chat
 
 credentials: {}
 

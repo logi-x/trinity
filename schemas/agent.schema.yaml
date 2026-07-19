@@ -1,0 +1,402 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://logix.com/schemas/agent.schema.yaml
+
+title: Logix Agent Configuration
+description: Schema for Logix agent definitions
+type: object
+additionalProperties: false
+
+required:
+  - name
+  - display_name
+  - description
+  - type
+  - version
+  - capabilities
+  - commands
+
+properties:
+  name:
+    type: string
+    minLength: 1
+
+  hidden:
+    type: boolean
+    default: false
+  runtime:
+    type: object
+    additionalProperties: false
+    required:
+      - type
+      - model
+    properties:
+      type:
+        type: string
+        enum:
+          - codex
+          - claude
+          - gpt
+          - llama
+          - deepseek
+          - grok
+          - ollama
+          - openai
+          - anthropic
+          - gemini-cli
+          - azure
+          - aws
+          - huggingface
+          - cohere
+          - vercel
+          - openrouter
+      model:
+        type: string
+        minLength: 1
+        enum:
+          - gpt-4o
+          - claude-3.5-sonnet
+          - gpt-5.1-codex
+          - llama-3.1-8b
+          - deepseek-r1-distill-qwen-32b
+          - grok-2-latest
+          - ollama-llama3.1-8b
+          - openai-gpt-4o
+          - anthropic-claude-3.5-sonnet
+          - gemini-3-flash
+          - azure-gpt-4o
+          - aws-gpt-4o
+          - huggingface-llama-3.1-8b
+          - cohere-command-r-latest
+          - vercel-gpt-4o
+          - openrouter-gpt-4o
+
+  display_name:
+    type: string
+    minLength: 1
+
+  description:
+    type: string
+    minLength: 1
+
+  type:
+    type: string
+    minLength: 1
+
+  priority:
+    type: integer
+    minimum: 0
+    default: 20
+
+  author:
+    type: string
+    default: Logix
+
+  version:
+    type: string
+    pattern: '^\d+\.\d+\.\d+$'
+    examples:
+      - 1.0.0
+
+  updated:
+    type: string
+    format: date
+    examples:
+      - 2026-07-19
+
+  tagline:
+    type: string
+
+  avatar_prompt:
+    type: string
+
+  resources:
+    type: object
+    additionalProperties: false
+    required:
+      - cpu
+      - memory
+    properties:
+      cpu:
+        type: string
+        examples:
+          - 500m
+          - "1"
+      memory:
+        type: string
+        examples:
+          - 512Mi
+          - 2Gi
+
+  capabilities:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      type: string
+
+  use_cases:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+
+  sub_agents:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - description
+      properties:
+        name:
+          type: string
+          pattern: '^[a-zA-Z][a-zA-Z0-9_-]*$'
+        description:
+          type: string
+          minLength: 1
+          examples:
+            - "Vault manager for CRUD operations on Obsidian vault notes with knowledge graph integrity"
+            - "Connection finder for discovering hidden connections and relationships between permanent notes"
+            - "Auto-discovery for autonomous cross-domain connection hunting using analytical reasoning"
+            - "Insight extractor for extracting unique insights from personal content, preserving authentic voice"
+            - "Document insight extractor for extracting insights from external research (papers, books, articles)"
+            - "Thinking partner for brainstorming and ideation support through dialogue"
+            - "Diagram generator for creating Mermaid diagrams and visualizations"
+            - "Local brain search for SYNAPSE-inspired vector search with spreading activation and usage-based learning"
+
+  credentials:
+    type: object
+    additionalProperties: false
+    properties:
+      mcp_servers:
+        type: object
+        additionalProperties:
+          type: object
+          additionalProperties: false
+          properties:
+            env_vars:
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+        propertyNames:
+          type: string
+          pattern: '^[a-zA-Z][a-zA-Z0-9_-]*$'
+      env_file:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+  skills:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - description
+      properties:
+        name:
+          type: string
+          pattern: '^[a-zA-Z][a-zA-Z0-9_-]*$'
+        description:
+          type: string
+          minLength: 1
+          examples:
+            - "Classify requests by outcome owner and interaction type"
+            - "Coordinate durable or cross-domain work through owners and approvals"
+
+  commands:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - description
+      properties:
+        name:
+          type: string
+          pattern: '^[a-zA-Z][a-zA-Z0-9_-]*$'
+        description:
+          type: string
+        usage:
+          type: string
+          description: >
+            Optional invocation hint prefilling the chat input on click
+            (e.g. "/route [task-id] [arguments]"). Falls back to "/{name}".
+          examples:
+            - "/route [task-id] [arguments]"
+            - "/research [topic]"
+
+  slash_commands:
+    type: array
+    uniqueItems: true
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - description
+      properties:
+        name:
+          type: string
+          # /command, /command/action, /ops/schedules/resume, …
+          pattern: '^/[a-zA-Z][a-zA-Z0-9_-]*(/[a-zA-Z][a-zA-Z0-9_-]*)*$'
+        description:
+          type: string
+          minLength: 1
+        arguments:
+          type: string
+          description: Optional argument hint shown in docs/UI (e.g. "<agent-name>")
+
+  shared_folders:
+    type: object
+    additionalProperties: false
+    required:
+      - expose
+      - consume
+    properties:
+      expose:
+        type: boolean
+        default: true
+      consume:
+        type: boolean
+        default: true
+
+  mcp_servers:
+    type: array
+    uniqueItems: true
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - description
+      properties:
+        name:
+          type: string
+          pattern: '^[a-zA-Z][a-zA-Z0-9_-]*$'
+        description:
+          type: string
+          minLength: 1
+
+  git:
+    type: object
+    additionalProperties: false
+    properties:
+      push_enabled:
+        type: boolean
+        default: false
+      commit_paths:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          minLength: 1
+      ignore_paths:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          minLength: 1
+
+  planning:
+    type: object
+    additionalProperties: false
+    properties:
+      enabled:
+        type: boolean
+        default: false
+      max_active_plans:
+        type: integer
+        minimum: 1
+      default_task_timeout_minutes:
+        type: integer
+        minimum: 1
+      auto_checkpoint:
+        type: boolean
+        default: false
+
+  metrics:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - type
+        - label
+        - description
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        unit:
+          type: string
+          minLength: 1
+        values:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - value
+              - color
+              - label
+            properties:
+              value:
+                type: string
+              color:
+                type: string
+              label:
+                type: string
+
+
+  schedules:
+    type: array
+    description: >
+      Optional default schedules seeded when the agent is created
+      (system manifests / template deploy). Overridable at deploy time.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - cron
+        - message
+      properties:
+        name:
+          type: string
+          minLength: 1
+        cron:
+          type: string
+          minLength: 1
+          description: Cron expression (5-field)
+          examples:
+            - "0 */4 * * *"
+            - "0 9 * * *"
+        message:
+          type: string
+          minLength: 1
+          description: Message sent to the agent on tick (usually a slash command)
+          examples:
+            - "/research"
+            - "/briefing"
+        description:
+          type: string
+        timezone:
+          type: string
+          default: UTC
+          examples:
+            - UTC
+            - America/New_York
+        enabled:
+          type: boolean
+          default: true

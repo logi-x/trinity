@@ -1,6 +1,7 @@
 name: dd-traction
 display_name: DD Traction Agent
 description: Growth metrics verification, financial health assessment, and data accuracy validation
+type: business-assistant
 tagline: Show me the numbers
 version: "1.0.0"
 author: Logix
@@ -14,6 +15,8 @@ capabilities:
   - financial-analysis
   - growth-assessment
   - data-validation
+
+commands: []
 
 use_cases:
   - "Verify growth velocity claims"

@@ -24,6 +24,8 @@ capabilities:
   - google-search-integration
   - large-context  # 1M tokens
 
+commands: []
+
 mcp_servers: []
 
 credentials: {}

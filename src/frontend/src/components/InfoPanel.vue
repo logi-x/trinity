@@ -171,12 +171,14 @@
             :key="getItemName(command)"
             class="flex items-start space-x-3 px-3 py-2 bg-accent-purple-50 dark:bg-accent-purple-900/30 rounded-lg hover:bg-accent-purple-100 dark:hover:bg-accent-purple-900/50 cursor-pointer transition-colors"
             @click="handleCommandClick(command)"
-            title="Click to run this command"
+            :title="getCommandPrefill(command)"
           >
-            <span class="text-sm font-mono font-medium text-accent-purple-800 dark:text-accent-purple-300 flex-shrink-0">/{{ getItemName(command) }}</span>
-            <p v-if="getItemDescription(command)" class="text-xs text-accent-purple-600 dark:text-accent-purple-400 mt-0.5 flex-1">
-              {{ getItemDescription(command) }}
-            </p>
+            <div class="flex-1 min-w-0">
+              <span class="text-sm font-mono font-medium text-accent-purple-800 dark:text-accent-purple-300">{{ getCommandPrefill(command) }}</span>
+              <p v-if="getItemDescription(command)" class="text-xs text-accent-purple-600 dark:text-accent-purple-400 mt-0.5">
+                {{ getItemDescription(command) }}
+              </p>
+            </div>
             <svg class="w-4 h-4 text-accent-purple-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
             </svg>
@@ -357,6 +359,15 @@ const getItemDescription = (item) => {
   return item?.description || null
 }
 
+/** Prefill text for chat: optional usage, else "/{name}". */
+const getCommandPrefill = (command) => {
+  if (typeof command === 'string') return `/${command}`
+  const usage = typeof command?.usage === 'string' ? command.usage.trim() : ''
+  if (usage) return usage
+  const name = getItemName(command)
+  return name ? `/${name}` : ''
+}
+
 const formatCapability = (capability) => {
   // Convert snake_case to Title Case
   return capability
@@ -375,8 +386,7 @@ const handleUseCaseClick = (text) => {
 }
 
 const handleCommandClick = (command) => {
-  const commandName = getItemName(command)
-  handleItemClick('command', `/${commandName}`)
+  handleItemClick('command', getCommandPrefill(command))
 }
 
 const handleSubAgentClick = (subAgent) => {

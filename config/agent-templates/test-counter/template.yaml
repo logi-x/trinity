@@ -6,10 +6,28 @@ description: Counter agent for testing state persistence across messages
 version: "1.0.0"
 author: Logix Platform
 
+type: counter-agent
+
 resources:
   cpu: "1"
   memory: "2g"
 
 mcp_servers: []
 
+commands: []
+
 credentials: {}
+
+capabilities:
+  - counter
+  - chat
+  - web-search
+  - code-generation
+  - file-upload
+  - file-download
+  - file-delete
+  - file-rename
+  - file-move
+  - file-copy
+  - file-paste
+  - file-cut

@@ -7,6 +7,8 @@ tagline: Strategic insights for Logix from research
 version: "1.0.0"
 author: Logix
 
+type: analyst
+
 avatar_prompt: A thoughtful analyst surrounded by floating data visualizations and charts, wearing smart-casual attire with reading glasses, warm studio lighting, contemplative expression
 
 resources:

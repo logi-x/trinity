@@ -5,6 +5,8 @@ tagline: The front door to due diligence
 version: "1.0.0"
 author: Logix
 
+type: intake-agent
+
 resources:
   cpu: "1"
   memory: "2g"
@@ -23,6 +25,8 @@ use_cases:
 shared_folders:
   expose: true
   consume: false
+
+commands: []
 
 metrics:
   - name: decks_processed

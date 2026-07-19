@@ -5,6 +5,8 @@ tagline: Dotting i's and crossing t's
 version: "1.0.0"
 author: Logix
 
+type: legal-agent
+
 resources:
   cpu: "2"
   memory: "4g"
@@ -24,6 +26,8 @@ use_cases:
 shared_folders:
   expose: true
   consume: true
+
+commands: []
 
 metrics:
   - name: legal_reviews

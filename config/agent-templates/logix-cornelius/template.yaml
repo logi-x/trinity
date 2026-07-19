@@ -22,6 +22,8 @@ resources:
   cpu: "2"
   memory: "4g"
 
+commands: []
+
 # Optional Metadata
 version: "1.25.0"
 author: "Logix"

@@ -5,6 +5,8 @@ tagline: Does the math work?
 version: "1.0.0"
 author: Logix
 
+type: bizmodel-agent
+
 resources:
   cpu: "1"
   memory: "2g"
@@ -24,6 +26,8 @@ use_cases:
 shared_folders:
   expose: true
   consume: true
+
+commands: []
 
 metrics:
   - name: models_analyzed

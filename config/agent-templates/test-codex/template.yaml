@@ -22,6 +22,8 @@ capabilities:
   - chat
   - code-generation
   - web-search
+  
+commands: []
 
 mcp_servers: []
 

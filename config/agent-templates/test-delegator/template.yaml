@@ -6,10 +6,19 @@ description: Delegator agent for testing agent-to-agent communication (Pillar II
 version: "1.0.0"
 author: Logix Platform
 
+type: business-assistant
+
 resources:
   cpu: "1"
   memory: "2g"
 
 mcp_servers: []
+
+commands: []
+
+capabilities:
+  - chat
+  - code-generation
+  - web-search
 
 credentials: {}

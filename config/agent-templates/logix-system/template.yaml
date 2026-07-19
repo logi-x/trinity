@@ -24,6 +24,8 @@ capabilities:
 
 mcp_servers: []
 
+commands: []
+
 credentials: {}
 
 slash_commands:
@@ -86,4 +88,13 @@ metrics:
     type: status
     label: "Health"
     description: "Overall platform health"
-    values: ["healthy", "degraded", "critical"]
+    values:
+      - value: "healthy"
+        color: "green"
+        label: "Healthy"
+      - value: "degraded"
+        color: "yellow"
+        label: "Degraded"
+      - value: "critical"
+        color: "red"
+        label: "Critical"

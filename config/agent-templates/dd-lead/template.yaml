@@ -5,6 +5,8 @@ tagline: The verdict
 version: "1.0.0"
 author: Logix
 
+type: lead-agent
+
 resources:
   cpu: "4"
   memory: "8g"
@@ -24,6 +26,8 @@ use_cases:
 shared_folders:
   expose: true
   consume: true
+
+commands: []
 
 metrics:
   - name: deals_evaluated

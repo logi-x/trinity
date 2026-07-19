@@ -6,11 +6,20 @@ description: Echo agent that sleeps before responding — used by canary harness
 version: "1.0.0"
 author: Logix Platform
 
+type: business-assistant
+
 resources:
   cpu: "1"
   memory: "512m"
 
 mcp_servers: []
+
+commands: []
+
+capabilities:
+  - chat
+  - code-generation
+  - web-search
 
 credentials: {}
 

@@ -7,6 +7,8 @@ tagline: Discovers Logix-relevant trends and opportunities
 version: "1.0.0"
 author: Logix
 
+type: researcher
+
 resources:
   cpu: "1"
   memory: "2g"
