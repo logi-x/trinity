@@ -167,6 +167,7 @@ async def get_agents_context_stats(current_user: User = Depends(get_current_user
 
 
 @router.get("/execution-stats")
+@router.get("/stats")  # alias used by system-agent ops docs; must stay before /{agent_name}
 async def get_agents_execution_stats(
     hours: int = 24,
     include_7d: bool = False,

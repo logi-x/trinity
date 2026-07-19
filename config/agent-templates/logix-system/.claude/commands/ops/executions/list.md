@@ -14,7 +14,7 @@ List recent task executions across all agents.
 Get execution statistics for all agents in the last 24 hours:
 
 ```bash
-curl -s "http://backend:8000/api/agents/stats?hours=24" \
+curl -s "http://backend:8000/api/agents/execution-stats?hours=24" \
   -H "Authorization: Bearer $TRINITY_MCP_API_KEY" | jq
 ```
 

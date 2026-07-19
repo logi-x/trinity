@@ -203,9 +203,11 @@ curl -X POST "http://backend:8000/api/ops/schedules/resume" \
 
 **Get Execution Statistics:**
 ```bash
-curl -s "http://backend:8000/api/agents/stats?hours=24" \
+curl -s "http://backend:8000/api/agents/execution-stats?hours=24" \
   -H "Authorization: Bearer $TRINITY_MCP_API_KEY"
 ```
+
+(`/api/agents/stats` is an alias for the same endpoint.)
 
 **Get Agent's Executions:**
 ```bash
