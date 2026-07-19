@@ -88,7 +88,7 @@ docker exec trinity-backend python3 -c "
 import asyncio
 from services.docker_service import get_agent_container
 from services.agent_service.lifecycle import recreate_container_with_updated_config
-name = 'logix-cornelius'
+name = 'logix-system'
 c = get_agent_container(name)
 assert c, 'agent container not found'
 asyncio.run(recreate_container_with_updated_config(name, c, 'system'))
@@ -104,6 +104,7 @@ names = [
     'logix-system',
     'cornelius',
     'experts',
+    'howa',
     'atlas',
 ]
 async def main():

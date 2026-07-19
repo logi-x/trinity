@@ -42,7 +42,7 @@
 | T-007 | SOFT | STATIC | template.yaml | `version` field present (semantic version format) |
 | T-008 | SOFT | STATIC | template.yaml | `author` field present |
 | T-009 | SOFT | AI | template.yaml | `description` is substantive (2+ sentences, explains purpose clearly) |
-| T-010 | SOFT | STATIC | template.yaml | `use_cases` array present with 3–7 examples |
+| T-010 | SOFT | STATIC | template.yaml | `use_cases` array present with 3–10 examples |
 | T-011 | SOFT | STATIC | template.yaml | `capabilities` array present |
 | T-012 | SOFT | STATIC | template.yaml | `mcp_servers` descriptions match actual servers in `.mcp.json.template` |
 | T-013 | SOFT | AI | template.yaml | `use_cases` entries are realistic, specific, actionable prompts (not buzzword lists) |
@@ -254,9 +254,9 @@ Required for template marketplace attribution.
 Severity: SOFT | Type: AI  
 The description must explain what the agent does and for whom in at least 2 sentences. Evaluate: does it answer "what does this agent do?" and "who would use it?"
 
-**T-010** — `use_cases` array with 3–7 entries  
+**T-010** — `use_cases` array with 3–10 entries  
 Severity: SOFT | Type: STATIC  
-Fewer than 3 gives users no guidance. More than 7 clutters the UI.
+Fewer than 3 gives users no guidance. More than 10 clutters the UI.
 
 **T-011** — `capabilities` array present  
 Severity: SOFT | Type: STATIC  

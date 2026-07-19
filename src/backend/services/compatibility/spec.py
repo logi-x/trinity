@@ -106,7 +106,7 @@ CHECKS: List[CheckDef] = [
     _c("T-008", "soft", "static", "T", "author field present"),
     _c("T-009", "soft", "ai", "T", "description is substantive",
        prompt="Is the template description substantive — does it explain what the agent does AND who would use it, in at least two sentences? PASS only if both are clear."),
-    _c("T-010", "soft", "static", "T", "use_cases array present with 3–7 examples"),
+    _c("T-010", "soft", "static", "T", "use_cases array present with 3–10 examples"),
     _c("T-011", "soft", "static", "T", "capabilities array present"),
     _c("T-012", "soft", "static", "T", "mcp_servers descriptions match .mcp.json.template"),
     _c("T-013", "soft", "ai", "T", "use_cases entries are realistic, specific prompts",

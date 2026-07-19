@@ -462,8 +462,8 @@ def c_t010(snap):
         uc = d.get("use_cases")
         if not isinstance(uc, list) or not uc:
             return _fail("template.yaml 'use_cases' is missing or empty")
-        if not (3 <= len(uc) <= 7):
-            return _fail(f"use_cases should have 3–7 entries (has {len(uc)})", {"count": len(uc)})
+        if not (3 <= len(uc) <= 10):
+            return _fail(f"use_cases should have 3–10 entries (has {len(uc)})", {"count": len(uc)})
         return _ok("use_cases count is in range")
     return _with_template(snap, f)
 

@@ -22,6 +22,18 @@ capabilities:
   - platform-alerting
   - compliance-auditing
 
+use_cases:
+  - "Show me fleet status — which agents are running, stopped, or stuck, and their recent activity"
+  - "Run a health check and recommend what to restart or investigate"
+  - "Restart a specific agent cleanly after a crash or stuck session"
+  - "Pause all schedules before maintenance, then resume them when the platform is healthy"
+  - "List recent task executions and dig into a failed run by execution id"
+  - "Report platform spend and token cost trends from OTel metrics"
+  - "Audit every agent for Trinity compatibility and summarize gaps"
+  - "Ask agents to self-check MCP, credentials, and workspace setup without changing anything"
+  - "Refresh the platform dashboard with current agent, schedule, and cost metrics"
+  - "Help design a multi-step process YAML — pick agents, approval gates, and notifications"
+
 mcp_servers: []
 
 credentials: {}
