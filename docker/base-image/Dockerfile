@@ -129,6 +129,11 @@ ENV PYTHONPATH="/app:${PYTHONPATH}"
 
 EXPOSE 22 8000
 
+# Container "running" is not sufficient readiness: startup may still be
+# cloning a first workspace. Surface the actual agent API state to Docker.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5m --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/health >/dev/null || exit 1
+
 USER root
 
 RUN mkdir -p /workspace /data /logs && \
@@ -148,4 +153,3 @@ RUN mkdir -p /var/lib/trinity && \
 USER developer
 
 CMD ["/app/startup.sh"]
-

@@ -63,7 +63,7 @@
               <input
                 v-model="searchQuery"
                 type="text"
-                placeholder="Search files..."
+                placeholder="Search loaded files..."
                 class="w-full pl-7 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700 dark:text-white focus:ring-action-primary-500 focus:border-action-primary-500"
               />
               <svg class="absolute left-2 top-2 h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -102,12 +102,23 @@
               :selected-path="selectedFile?.path"
               :search-query="searchQuery"
               @select="onFileSelect"
+              @expand="loadDirectory"
+              @load-more="loadMoreDirectory"
             />
+            <button
+              v-if="rootHasMore && !searchQuery"
+              type="button"
+              class="w-full px-2 py-1.5 text-xs text-action-primary-600 dark:text-action-primary-400 hover:bg-action-primary-50 dark:hover:bg-action-primary-900/20 rounded"
+              :disabled="rootLoadingMore"
+              @click="loadMoreRoot"
+            >
+              {{ rootLoadingMore ? 'Loading…' : 'Load more' }}
+            </button>
           </div>
 
           <!-- Footer Stats -->
           <div class="px-2 py-1.5 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
-            <span v-if="selectedAgentName">{{ totalFiles }} files<span v-if="totalSize > 0"> &bull; {{ formatFileSize(totalSize) }}</span></span>
+            <span v-if="selectedAgentName">{{ totalFiles }} loaded files<span v-if="totalSize > 0"> &bull; {{ formatFileSize(totalSize) }}</span></span>
             <span v-else>&nbsp;</span>
           </div>
         </div>
@@ -246,9 +257,9 @@
               <div class="mt-2">
                 <p class="text-sm text-gray-500 dark:text-gray-400">
                   Are you sure you want to delete <strong class="text-gray-900 dark:text-white">{{ selectedFile?.name }}</strong>?
-                  <span v-if="selectedFile?.type === 'directory'">
-                    This will delete all {{ selectedFile?.file_count || 0 }} files inside.
-                  </span>
+                    <span v-if="selectedFile?.type === 'directory'">
+                      This will delete the folder and all files inside it.
+                    </span>
                   This action cannot be undone.
                 </p>
               </div>
@@ -311,6 +322,9 @@ const downloading = ref(false)
 const deleting = ref(false)
 const showDeleteConfirm = ref(false)
 const showHidden = ref(localStorage.getItem('fileManager.showHidden') === 'true')
+const rootHasMore = ref(false)
+const rootNextOffset = ref(null)
+const rootLoadingMore = ref(false)
 // Edit mode state
 const isEditing = ref(false)
 const editContent = ref('')
@@ -401,21 +415,103 @@ const isTextFile = computed(() => {
 })
 
 // Methods
+const findTreeItem = (path, items = fileTree.value) => {
+  for (const item of items) {
+    if (item.path === path) return item
+    const nested = findTreeItem(path, item.children || [])
+    if (nested) return nested
+  }
+  return null
+}
+
 const loadFiles = async () => {
   if (!selectedAgentName.value) return
 
   loading.value = true
   error.value = null
+  rootHasMore.value = false
+  rootNextOffset.value = null
   // Persist showHidden preference
   localStorage.setItem('fileManager.showHidden', showHidden.value)
   try {
-    const data = await agentsStore.listAgentFiles(selectedAgentName.value, '/home/developer', showHidden.value)
+    const data = await agentsStore.listAgentFiles(selectedAgentName.value, '/home/developer', showHidden.value, 0)
     fileTree.value = data.tree || []
+    rootHasMore.value = Boolean(data.has_more)
+    rootNextOffset.value = data.next_offset
   } catch (e) {
     error.value = e.response?.data?.detail || e.message
     showNotification(`Failed to load files: ${error.value}`, 'error')
   } finally {
     loading.value = false
+  }
+}
+
+const loadDirectory = async (item) => {
+  const target = findTreeItem(item.path) || item
+  if (!selectedAgentName.value || target.type !== 'directory' || target.children_loading || target.children_loaded) return
+
+  target.children_loading = true
+  target.children_error = null
+  try {
+    const data = await agentsStore.listAgentFiles(
+      selectedAgentName.value,
+      target.path,
+      showHidden.value,
+      0
+    )
+    target.children = data.tree || []
+    target.children_loaded = true
+    target.children_has_more = Boolean(data.has_more)
+    target.children_next_offset = data.next_offset
+  } catch (e) {
+    target.children_error = e.response?.data?.detail || e.message || 'Failed to load folder'
+  } finally {
+    target.children_loading = false
+  }
+}
+
+const loadMoreDirectory = async (item) => {
+  const target = findTreeItem(item.path) || item
+  if (!target.children_has_more || target.children_loading || target.children_next_offset == null) return
+
+  target.children_loading = true
+  target.children_error = null
+  try {
+    const data = await agentsStore.listAgentFiles(
+      selectedAgentName.value,
+      target.path,
+      showHidden.value,
+      target.children_next_offset
+    )
+    target.children.push(...(data.tree || []))
+    target.children_has_more = Boolean(data.has_more)
+    target.children_next_offset = data.next_offset
+  } catch (e) {
+    target.children_error = e.response?.data?.detail || e.message || 'Failed to load more files'
+  } finally {
+    target.children_loading = false
+  }
+}
+
+const loadMoreRoot = async () => {
+  if (!rootHasMore.value || rootLoadingMore.value || rootNextOffset.value == null) return
+
+  rootLoadingMore.value = true
+  try {
+    const data = await agentsStore.listAgentFiles(
+      selectedAgentName.value,
+      '/home/developer',
+      showHidden.value,
+      rootNextOffset.value
+    )
+    fileTree.value.push(...(data.tree || []))
+    rootHasMore.value = Boolean(data.has_more)
+    rootNextOffset.value = data.next_offset
+  } catch (e) {
+    const message = e.response?.data?.detail || e.message || 'Failed to load more files'
+    showNotification(`Failed to load more files: ${message}`, 'error')
+  } finally {
+    rootLoadingMore.value = false
   }
 }
 

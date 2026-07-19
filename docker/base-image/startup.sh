@@ -22,6 +22,21 @@ AGENT_TMPDIR="${TMPDIR:-/home/developer/.tmp}"
 mkdir -p "${AGENT_TMPDIR}" 2>/dev/null && chmod 700 "${AGENT_TMPDIR}" 2>/dev/null || \
     echo "Warning: could not create TMPDIR ${AGENT_TMPDIR}; scratch will fall back to /tmp"
 
+# A restart already has a complete workspace. Refreshing remote refs is useful,
+# but it must not hold the internal API offline when GitHub is slow or
+# unreachable. Bound the fetch and let the rest of startup continue.
+fetch_origin_in_background() {
+    local timeout_seconds="${GIT_STARTUP_FETCH_TIMEOUT_SECONDS:-30}"
+    (
+        echo "Refreshing Git refs in background (timeout: ${timeout_seconds}s)..."
+        if timeout --foreground "${timeout_seconds}s" git fetch origin 2>&1; then
+            echo "Background Git ref refresh complete"
+        else
+            echo "Note: Could not refresh remote refs during startup"
+        fi
+    ) &
+}
+
 # Initialize from GitHub repository if specified
 if [ -n "${GITHUB_REPO}" ] && [ -n "${GITHUB_PAT}" ]; then
     echo "Initializing agent from GitHub repository: ${GITHUB_REPO}"
@@ -44,7 +59,7 @@ if [ -n "${GITHUB_REPO}" ] && [ -n "${GITHUB_PAT}" ]; then
             # The .git directory persists on the volume, so current branch (in .git/HEAD) is retained
             # We only fetch to update remote refs - no checkout, no branch change
             echo "Repository already exists on persistent volume - skipping clone"
-            echo "Running git fetch to sync with remote..."
+            echo "Scheduling git fetch to sync remote refs..."
             cd /home/developer || exit 1
             CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
             echo "Current branch: ${CURRENT_BRANCH} (preserved from previous run)"
@@ -61,7 +76,7 @@ if [ -n "${GITHUB_REPO}" ] && [ -n "${GITHUB_PAT}" ]; then
                     git remote add upstream "${UPSTREAM_URL}" 2>/dev/null || \
                     echo "Note: could not add upstream remote"
             fi
-            git fetch origin 2>&1 || echo "Note: Could not fetch from remote"
+            fetch_origin_in_background
 
             # #1439: .git exists ⇒ a prior clone succeeded; clear any stale
             # failure marker so health doesn't report a recovered agent unhealthy.
@@ -391,13 +406,18 @@ fi
 # Ensure core agent-server dependencies are installed correctly
 # This prevents template repos from breaking the agent server with incompatible packages
 echo "Verifying agent-server dependencies..."
-python3 -m pip install --user --quiet --upgrade \
-    fastapi \
-    uvicorn \
-    httpx \
-    pydantic \
-    python-multipart \
-    pyyaml
+if ! python3 -c 'import fastapi, uvicorn, httpx, pydantic, multipart, yaml' >/dev/null 2>&1; then
+    echo "Agent-server dependencies need repair; attempting bounded install..."
+    timeout --foreground "${AGENT_DEPENDENCY_REPAIR_TIMEOUT_SECONDS:-60}s" \
+        python3 -m pip install --user --quiet \
+            fastapi \
+            uvicorn \
+            httpx \
+            pydantic \
+            python-multipart \
+            pyyaml || \
+        echo "Warning: agent-server dependency repair failed or timed out"
+fi
 
 # Start SSH if enabled
 if [ "${ENABLE_SSH}" = "true" ]; then
@@ -494,4 +514,3 @@ mkdir -p /home/developer/content/{videos,audio,images,exports}
 
 echo "Agent ready. Keeping container alive..."
 tail -f /dev/null
-

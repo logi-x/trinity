@@ -50,8 +50,24 @@
         :selected-path="selectedPath"
         :search-query="searchQuery"
         @select="$emit('select', $event)"
+        @expand="$emit('expand', $event)"
+        @load-more="$emit('load-more', $event)"
       />
-      <div v-if="!item.children?.length" class="px-2 py-1 text-xs text-gray-400 dark:text-gray-500 italic">
+      <div v-if="item.children_loading" class="px-2 py-1 text-xs text-gray-400 dark:text-gray-500 italic">
+        Loading…
+      </div>
+      <div v-else-if="item.children_error" class="px-2 py-1 text-xs text-status-danger-500">
+        {{ item.children_error }}
+      </div>
+      <button
+        v-if="item.children_has_more && !item.children_loading && !searchQuery"
+        type="button"
+        class="w-full px-2 py-1 text-left text-xs text-action-primary-600 dark:text-action-primary-400 hover:bg-action-primary-50 dark:hover:bg-action-primary-900/20 rounded"
+        @click.stop="$emit('load-more', item)"
+      >
+        Load more
+      </button>
+      <div v-if="item.children_loaded && !item.children_loading && !item.children?.length" class="px-2 py-1 text-xs text-gray-400 dark:text-gray-500 italic">
         Empty folder
       </div>
     </div>
@@ -67,7 +83,7 @@ const props = defineProps({
   searchQuery: { type: String, default: '' }
 })
 
-const emit = defineEmits(['select'])
+const emit = defineEmits(['select', 'expand', 'load-more'])
 
 // Local state for expansion (auto-expand if search matches)
 const expanded = ref(props.item.expanded || false)
@@ -129,6 +145,9 @@ const iconColor = computed(() => {
 const handleClick = () => {
   if (props.item.type === 'directory') {
     expanded.value = !expanded.value
+    if (expanded.value && !props.item.children_loaded) {
+      emit('expand', props.item)
+    }
   }
   emit('select', props.item)
 }

@@ -5,6 +5,24 @@
       <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-action-primary-500"></div>
     </div>
 
+    <!-- Agent API temporarily unavailable -->
+    <div v-else-if="templateError" class="text-center py-8">
+      <div class="mx-auto w-16 h-16 bg-status-warning-100 dark:bg-status-warning-900/30 rounded-full flex items-center justify-center mb-4">
+        <svg class="w-8 h-8 text-status-warning-600 dark:text-status-warning-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+      </div>
+      <h3 class="text-lg font-medium text-gray-900 dark:text-white">Template Information Unavailable</h3>
+      <p class="mt-2 text-sm text-gray-500 dark:text-gray-400 max-w-sm mx-auto">{{ templateError }}</p>
+      <button
+        type="button"
+        class="mt-4 inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-action-primary-600 hover:bg-action-primary-700"
+        @click="loadTemplateInfo"
+      >
+        Try again
+      </button>
+    </div>
+
     <!-- No Template State -->
     <div v-else-if="!templateInfo?.has_template" class="text-center py-8">
       <div class="mx-auto w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-4">
@@ -313,6 +331,7 @@ const emit = defineEmits(['item-click'])
 const agentsStore = useAgentsStore()
 const templateInfo = ref(null)
 const loading = ref(true)
+const templateError = ref(null)
 
 // #1107: whether any technical-metadata section has content (gates the
 // collapsible "Technical details" disclosure).
@@ -333,15 +352,14 @@ const hasTechnicalDetails = computed(() => {
 
 const loadTemplateInfo = async () => {
   loading.value = true
+  templateError.value = null
   try {
     const response = await agentsStore.getAgentInfo(props.agentName)
     templateInfo.value = response
   } catch (error) {
     console.error('Failed to load template info:', error)
-    templateInfo.value = {
-      has_template: false,
-      message: 'Failed to load template information'
-    }
+    templateInfo.value = null
+    templateError.value = error.response?.data?.detail || 'The agent is still starting or temporarily busy.'
   } finally {
     loading.value = false
   }

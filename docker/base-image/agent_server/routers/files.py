@@ -1,6 +1,7 @@
 """
 File browser endpoints.
 """
+import asyncio
 import logging
 import mimetypes
 import shutil
@@ -19,89 +20,126 @@ class FileUpdateRequest(BaseModel):
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+WORKSPACE_ROOT = Path("/home/developer")
+DEFAULT_PAGE_SIZE = 250
+MAX_PAGE_SIZE = 1000
+
+
+def _list_directory_page(
+    directory: Path,
+    base_path: Path,
+    include_hidden: bool,
+    offset: int,
+    limit: int,
+) -> dict:
+    """Return one bounded directory page without traversing descendants."""
+    entries = []
+
+    for item in directory.iterdir():
+        if item.name.startswith(".") and not include_hidden:
+            continue
+
+        try:
+            stat = item.stat()
+            is_directory = item.is_dir()
+            entries.append((not is_directory, item.name.lower(), item, stat, is_directory))
+        except OSError as exc:
+            logger.warning("Failed to process item %s: %s", item, exc)
+
+    entries.sort(key=lambda entry: (entry[0], entry[1]))
+    total_entries = len(entries)
+    total_files = sum(1 for entry in entries if not entry[4])
+    page = entries[offset:offset + limit]
+    tree = []
+
+    for _, _, item, stat, is_directory in page:
+        relative_path = item.relative_to(base_path)
+        if is_directory:
+            tree.append({
+                "name": item.name,
+                "path": str(relative_path),
+                "type": "directory",
+                "children": [],
+                "children_loaded": False,
+                "file_count": None,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+        else:
+            tree.append({
+                "name": item.name,
+                "path": str(relative_path),
+                "type": "file",
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+
+    next_offset = offset + len(page)
+    has_more = next_offset < total_entries
+    return {
+        "tree": tree,
+        "total_files": total_files,
+        "total_entries": total_entries,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "next_offset": next_offset if has_more else None,
+    }
+
 
 @router.get("/api/files")
-async def list_files(path: str = "/home/developer", show_hidden: bool = False):
+async def list_files(
+    path: str = "/home/developer",
+    show_hidden: bool = False,
+    offset: int = 0,
+    limit: int = DEFAULT_PAGE_SIZE,
+):
     """
-    List files in the workspace directory recursively.
+    List one page of immediate children in a workspace directory.
     Only allows access to /home/developer for security.
 
     Args:
         path: Directory path to list
         show_hidden: If True, include hidden files (starting with .)
 
-    Returns a hierarchical tree structure with folders and files.
+    Descendants are fetched lazily by requesting their directory path.
     """
     # Security: Only allow workspace access
-    allowed_base = Path("/home/developer")
-    requested_path = Path(path).resolve()
+    allowed_base = WORKSPACE_ROOT.resolve()
+    raw_path = Path(path)
+    requested_path = (
+        raw_path if raw_path.is_absolute() else allowed_base / raw_path
+    ).resolve()
 
     # Ensure requested path is within workspace
-    if not str(requested_path).startswith(str(allowed_base)):
+    if not requested_path.is_relative_to(allowed_base):
         raise HTTPException(status_code=403, detail="Access denied: only /home/developer accessible")
 
     if not requested_path.exists():
         raise HTTPException(status_code=404, detail=f"Path not found: {path}")
 
-    def build_tree(directory: Path, base_path: Path, include_hidden: bool) -> dict:
-        """Build a hierarchical tree structure from a directory."""
-        items = []
-        total_files = 0
-
-        try:
-            # Get all items in directory
-            dir_items = sorted(directory.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
-
-            for item in dir_items:
-                # Skip hidden items unless show_hidden is True
-                if item.name.startswith('.') and not include_hidden:
-                    continue
-
-                try:
-                    stat = item.stat()
-                    relative_path = item.relative_to(base_path)
-
-                    if item.is_dir():
-                        # Recursively build tree for subdirectory
-                        subtree = build_tree(item, base_path, include_hidden)
-                        items.append({
-                            "name": item.name,
-                            "path": str(relative_path),
-                            "type": "directory",
-                            "children": subtree["children"],
-                            "file_count": subtree["file_count"],
-                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                        })
-                        total_files += subtree["file_count"]
-                    else:
-                        # It's a file
-                        items.append({
-                            "name": item.name,
-                            "path": str(relative_path),
-                            "type": "file",
-                            "size": stat.st_size,
-                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                        })
-                        total_files += 1
-
-                except Exception as e:
-                    logger.warning(f"Failed to process item {item}: {e}")
-                    continue
-
-        except Exception as e:
-            logger.error(f"Failed to read directory {directory}: {e}")
-
-        return {"children": items, "file_count": total_files}
+    if not requested_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path is not a directory: {path}")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be non-negative")
+    if limit < 1:
+        raise HTTPException(status_code=422, detail="limit must be positive")
+    page_size = min(limit, MAX_PAGE_SIZE)
 
     try:
-        tree_data = build_tree(requested_path, allowed_base, show_hidden)
+        page = await asyncio.to_thread(
+            _list_directory_page,
+            requested_path,
+            allowed_base,
+            show_hidden,
+            offset,
+            page_size,
+        )
 
         return {
             "base_path": str(allowed_base),
             "requested_path": str(requested_path.relative_to(allowed_base)) if requested_path != allowed_base else ".",
-            "tree": tree_data["children"],
-            "total_files": tree_data["file_count"],
-            "show_hidden": show_hidden
+            **page,
+            "show_hidden": show_hidden,
         }
 
     except Exception as e:

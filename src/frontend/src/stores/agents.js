@@ -606,10 +606,10 @@ export const useAgentsStore = defineStore('agents', {
       return response.data
     },
 
-    async listAgentFiles(name, path = '/home/developer', showHidden = false) {
+    async listAgentFiles(name, path = '/home/developer', showHidden = false, offset = 0, limit = 250) {
       const authStore = useAuthStore()
       const response = await axios.get(`/api/agents/${name}/files`, {
-        params: { path, show_hidden: showHidden },
+        params: { path, show_hidden: showHidden, offset, limit },
         headers: authStore.authHeader
       })
       return response.data

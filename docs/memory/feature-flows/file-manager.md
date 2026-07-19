@@ -4,6 +4,8 @@
 >
 > **Deprecated**: 2026-03-03 (Issue #51) - Standalone `/files` route removed. File management is now per-agent via the Files tab in Agent Detail. See [file-browser.md](file-browser.md).
 >
+> **Compatibility update**: 2026-07-19 - The preserved `FileManager.vue` and shared `FileTreeNode.vue` now follow the shallow, paginated, lazy-loading contract documented in [file-browser.md](file-browser.md).
+>
 > **Previous (2026-02-18)**: Files tab removed from AgentDetail.vue; File Manager was the primary file browsing interface
 >
 > **Related**: [file-browser.md](file-browser.md) - Documents the per-agent FilesPanel component (restored 2026-03-03)

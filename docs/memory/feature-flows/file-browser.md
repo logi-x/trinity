@@ -1,12 +1,13 @@
 # Feature: Per-Agent File Manager
 
-> **Updated**: 2026-03-03 - **Files tab restored to AgentDetail.vue** (Issue #51). FilesPanel.vue rewritten with full two-panel file manager using same components as standalone FileManager. Standalone `/files` route removed.
+> **Updated**: 2026-07-19 - Directory listings are shallow, paginated, and loaded on folder expansion. Filesystem scans run off the agent API event loop.
 >
 > **Previous (2026-02-18)**: Files tab removed from AgentDetail.vue. Users directed to standalone `/files` page.
 
 ## Revision History
 | Date | Changes |
 |------|---------|
+| 2026-07-19 | Replaced recursive whole-workspace responses with lazy directory pages (`offset`, `limit`, `has_more`, `next_offset`). Added per-folder loading/error states and Docker agent-server readiness health checks. |
 | 2026-03-03 | **Per-agent Files tab restored** (Issue #51): FilesPanel.vue rewritten with full file manager (tree + preview). Uses `file-manager/FileTreeNode.vue` and `file-manager/FilePreview.vue`. Standalone `/files` route removed. |
 | 2026-02-18 | Files tab removed from AgentDetail.vue. Users directed to standalone File Manager. |
 | 2026-01-23 | Verified all line numbers. Updated frontend architecture (FilesPanel + composable). Documented protected paths (delete/edit). |
@@ -17,6 +18,12 @@
 
 ## Overview
 Users can browse, preview, edit, download, and delete files from agent workspaces through the Trinity web UI without requiring SSH access. The file manager is embedded in the **Files tab** of each agent's detail page, providing a **two-panel layout** (tree on left, preview on right) with rich media support.
+
+### Current listing contract
+
+`GET /api/agents/{agent_name}/files` returns only the immediate children of the requested `path`. The UI requests a folder when it is expanded and uses `offset`/`limit` pagination when a single directory exceeds the page size. Responses include `total_entries`, `has_more`, and `next_offset`; directory entries start with `children: []` and `children_loaded: false`.
+
+The agent server performs the synchronous directory scan through `asyncio.to_thread`, so browsing a large directory cannot block template info, session, Git-status, or dashboard requests on the agent API event loop. Search and footer totals intentionally describe files already loaded into the client tree. This contract supersedes the older recursive-response examples retained later in this historical flow document.
 
 ## User Story
 As a Trinity user, I want to manage files in my agent's workspace using a familiar two-panel file manager so that I can browse, preview, edit, and delete files without needing SSH or Docker command-line access.

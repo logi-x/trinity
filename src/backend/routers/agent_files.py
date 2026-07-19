@@ -173,6 +173,8 @@ async def list_agent_files_endpoint(
     request: Request,
     path: str = "/home/developer",
     show_hidden: bool = False,
+    offset: int = 0,
+    limit: int = 250,
     current_user: User = Depends(get_current_user)
 ):
     """List files in the agent's workspace directory.
@@ -180,8 +182,18 @@ async def list_agent_files_endpoint(
     Args:
         path: Directory path to list (default: /home/developer)
         show_hidden: If True, include hidden files (starting with .)
+        offset: Zero-based offset within this directory
+        limit: Maximum entries returned for this page
     """
-    return await list_agent_files_logic(agent_name, path, current_user, request, show_hidden)
+    return await list_agent_files_logic(
+        agent_name,
+        path,
+        current_user,
+        request,
+        show_hidden,
+        offset,
+        limit,
+    )
 
 
 @router.get("/{agent_name}/files/download")

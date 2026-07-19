@@ -94,7 +94,9 @@ async def list_agent_files_logic(
     path: str,
     current_user: User,
     request: Request,
-    show_hidden: bool = False
+    show_hidden: bool = False,
+    offset: int = 0,
+    limit: int = 250,
 ) -> dict:
     """
     List files in the agent's workspace directory.
@@ -106,6 +108,8 @@ async def list_agent_files_logic(
         current_user: Current authenticated user
         request: HTTP request object
         show_hidden: If True, include hidden files (starting with .)
+        offset: Zero-based offset within the requested directory
+        limit: Maximum entries returned for this page
     """
     if not db.can_user_access_agent(current_user.username, agent_name):
         raise HTTPException(status_code=403, detail="You don't have permission to access this agent")
@@ -124,7 +128,12 @@ async def list_agent_files_logic(
             agent_name,
             "GET",
             "/api/files",
-            params={"path": path, "show_hidden": str(show_hidden).lower()},
+            params={
+                "path": path,
+                "show_hidden": str(show_hidden).lower(),
+                "offset": offset,
+                "limit": limit,
+            },
             max_retries=3,
             retry_delay=1.0,
             timeout=30.0
