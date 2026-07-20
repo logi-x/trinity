@@ -79,6 +79,11 @@ def test_normalize_memory_falls_back_to_default_on_empty():
     assert caps.normalize_memory("", "8g") == "8g"
 
 
+def test_normalize_memory_maps_legacy_64g_to_32g():
+    assert caps.normalize_memory("64g", "4g") == "32g"
+    assert caps.normalize_memory("64G", "4g") == "32g"
+
+
 @pytest.mark.parametrize("bad", ["512Mi", "512m", "4", "4gb", "0.5g", "huge"])
 def test_normalize_memory_rejects_invalid(bad):
     with pytest.raises(ValueError) as ei:

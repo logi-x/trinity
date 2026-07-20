@@ -185,10 +185,13 @@
                       :disabled="savingPlatformDefaultModel"
                       class="block flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-action-primary-500 focus:border-action-primary-500 dark:bg-gray-700 dark:text-white text-sm"
                     >
-                      <option value="claude-sonnet-4-6">Claude Sonnet 4.6 — Fast + smart (recommended)</option>
-                      <option value="claude-opus-4-8">Claude Opus 4.8 — Most capable</option>
-                      <option value="claude-opus-4-7">Claude Opus 4.7</option>
-                      <option value="claude-opus-4-6">Claude Opus 4.6</option>
+                      <option
+                        v-for="model in platformDefaultModelOptions"
+                        :key="model.value"
+                        :value="model.value"
+                      >
+                        {{ presetOptionLabel(model) }}
+                      </option>
                     </select>
                     <button
                       @click="savePlatformDefaultModel"
@@ -2075,6 +2078,7 @@ import AgentPermissionsMatrix from '../components/AgentPermissionsMatrix.vue'
 import TwoFactorPanel from '../components/settings/TwoFactorPanel.vue'
 import SsoPanel from '../components/settings/SsoPanel.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import { PRESET_MODELS, presetOptionLabel } from '../constants/models.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -2288,10 +2292,17 @@ const adminEmailCurrent = computed(() => {
   return e.includes('@') ? e : ''
 })
 
-// Platform default model (#831)
+// Platform default model (#831) — same presets as ModelSelector
 const platformDefaultModelValue = ref('claude-sonnet-4-6')
 const savingPlatformDefaultModel = ref(false)
 const platformDefaultModelSaveSuccess = ref(false)
+const platformDefaultModelOptions = computed(() => {
+  const value = platformDefaultModelValue.value
+  if (value && !PRESET_MODELS.some((m) => m.value === value)) {
+    return [...PRESET_MODELS, { value, label: value, note: 'Custom' }]
+  }
+  return PRESET_MODELS
+})
 
 // #1129: fleet-wide default access policy (require verified email for new agents)
 const defaultRequireEmail = ref(true)

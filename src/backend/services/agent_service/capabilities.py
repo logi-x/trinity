@@ -130,6 +130,13 @@ AGENT_DEFAULT_TMPDIR: str = '/home/developer/.tmp'
 # with an actionable message instead of crashing deep in container creation on a
 # raw int() / an invalid Docker mem string (#1197).
 VALID_CPU: tuple[str, ...] = ("1", "2", "4", "8", "16")
+# Legacy values once exposed in the per-agent resource UI/API but not in VALID_MEMORY.
+# Mapped on normalize so recreate doesn't fail on stale DB overrides (#1197).
+LEGACY_MEMORY_ALIASES: dict[str, str] = {
+    "64g": "32g",
+}
+
+
 VALID_MEMORY: tuple[str, ...] = ("1g", "2g", "4g", "8g", "16g", "32g")
 
 
@@ -156,6 +163,7 @@ def normalize_memory(value, default) -> str:
     ``ValueError`` with an actionable message.
     """
     mem = str(value if value not in (None, "") else default).strip().lower()
+    mem = LEGACY_MEMORY_ALIASES.get(mem, mem)
     if mem not in VALID_MEMORY:
         raise ValueError(
             f"Invalid memory '{mem}': must be one of {', '.join(VALID_MEMORY)} "

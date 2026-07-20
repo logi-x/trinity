@@ -228,6 +228,31 @@ class TestStaticChecks:
         snap["files"][".env.example"] = _f("ACME_TOKEN=your-token\n")
         assert _run_one("K-001", snap)[0] == "pass"
 
+    def test_t015_credentials_canonical_mcp_servers_env_vars(self):
+        """T-015 must read credentials.mcp_servers.*.env_vars (not top-level keys)."""
+        snap = good_snapshot()
+        snap["files"][".mcp.json.template"] = _f(
+            '{"mcpServers": {"elu": {"headers": {"Authorization": "Bearer ${ELU_API_KEY}"}}}}'
+        )
+        # Missing from credentials → fail
+        snap["files"]["template.yaml"] = _f(_GOOD_TEMPLATE)
+        assert _run_one("T-015", snap)[0] == "fail"
+        # Canonical nested shape → pass
+        snap["files"]["template.yaml"] = _f(
+            _GOOD_TEMPLATE
+            + "credentials:\n"
+            + "  mcp_servers:\n"
+            + "    elu:\n"
+            + "      env_vars:\n"
+            + "        - ELU_API_KEY\n"
+        )
+        assert _run_one("T-015", snap)[0] == "pass"
+        # Legacy top-level ENV key still accepted
+        snap["files"]["template.yaml"] = _f(
+            _GOOD_TEMPLATE + "credentials:\n  ELU_API_KEY:\n    required: false\n"
+        )
+        assert _run_one("T-015", snap)[0] == "pass"
+
     def test_dashboard_required_field_d003(self):
         snap = good_snapshot()
         snap["files"]["dashboard.yaml"] = _f("widgets:\n  - type: text\n    value: oops\n")  # text needs 'content'

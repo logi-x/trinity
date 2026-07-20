@@ -66,7 +66,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 80,
+    port: 8500,
     // Allow all hosts - Trinity runs behind a reverse proxy that handles host validation
     allowedHosts: true,
     proxy: {

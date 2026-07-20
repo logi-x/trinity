@@ -24,6 +24,7 @@ from services.agent_service.networks import (
     preflight_additional_networks,
     validate_additional_networks,
 )
+from services.agent_service.capabilities import VALID_CPU, VALID_MEMORY
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -274,7 +275,7 @@ async def set_agent_resources(
     cpu = body.get("cpu")
 
     # Validate memory format
-    valid_memory = ["1g", "2g", "4g", "8g", "16g", "32g", "64g"]
+    valid_memory = list(VALID_MEMORY)
     if memory and memory not in valid_memory:
         raise HTTPException(
             status_code=400,
@@ -282,7 +283,7 @@ async def set_agent_resources(
         )
 
     # Validate CPU format
-    valid_cpu = ["1", "2", "4", "8", "16"]
+    valid_cpu = list(VALID_CPU)
     if cpu and cpu not in valid_cpu:
         raise HTTPException(
             status_code=400,

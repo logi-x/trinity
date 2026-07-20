@@ -52,7 +52,13 @@ def agent_ops(db_backend):
 class TestValidator:
     def test_current_gen_models_are_valid(self):
         from services.settings_service import is_valid_public_channel_model
-        for m in ("claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"):
+        for m in (
+            "claude-fable-5",
+            "claude-sonnet-5",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ):
             assert is_valid_public_channel_model(m), m
 
     def test_unknown_or_bare_alias_is_invalid(self):

@@ -24,12 +24,14 @@ _platform_model_cache_ts: float = 0.0
 _PLATFORM_MODEL_CACHE_TTL = 60.0
 
 # #894: current-gen models an agent owner may select as a per-agent override for
-# public-facing channels. Mirrors the current presets in
-# `frontend/src/components/ModelSelector.vue` (kept in sync by hand — there is no
+# public-facing channels. Mirrors current (non-legacy) presets in
+# `frontend/src/constants/models.js` (kept in sync by hand — there is no
 # shared model registry across the Python/Vue boundary). A model removed from
 # this set after it was saved is treated as unset (→ platform default) by
 # `db.get_public_channel_model`, matching the #1080 graceful-degradation posture.
 PUBLIC_CHANNEL_MODELS = frozenset({
+    "claude-fable-5",
+    "claude-sonnet-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",

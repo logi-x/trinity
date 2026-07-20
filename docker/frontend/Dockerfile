@@ -12,7 +12,7 @@ RUN rm -f package-lock.json && npm install
 COPY . .
 
 # Expose port
-EXPOSE 80
+EXPOSE 8500
 
 # Run the development server
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

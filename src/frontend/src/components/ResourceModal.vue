@@ -53,13 +53,13 @@
               class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm focus:ring-action-primary-500 focus:border-action-primary-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             >
               <option value="">Inherit default ({{ resourceLimits.current_memory || '4g' }})</option>
-              <option value="1g">1 GB</option>
-              <option value="2g">2 GB</option>
-              <option value="4g">4 GB</option>
-              <option value="8g">8 GB</option>
-              <option value="16g">16 GB</option>
-              <option value="32g">32 GB</option>
-              <option value="64g">64 GB</option>
+              <option
+                v-for="opt in VALID_MEMORY_OPTIONS"
+                :key="opt.value"
+                :value="opt.value"
+              >
+                {{ opt.label }}
+              </option>
             </select>
           </div>
           <div>
@@ -71,11 +71,13 @@
               class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm focus:ring-action-primary-500 focus:border-action-primary-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             >
               <option value="">Inherit default ({{ resourceLimits.current_cpu || '2' }})</option>
-              <option value="1">1 Core</option>
-              <option value="2">2 Cores</option>
-              <option value="4">4 Cores</option>
-              <option value="8">8 Cores</option>
-              <option value="16">16 Cores</option>
+              <option
+                v-for="opt in VALID_CPU_OPTIONS"
+                :key="opt.value"
+                :value="opt.value"
+              >
+                {{ opt.label }}
+              </option>
             </select>
           </div>
         </div>
@@ -104,6 +106,8 @@
 </template>
 
 <script setup>
+import { VALID_MEMORY_OPTIONS, VALID_CPU_OPTIONS } from '../constants/agentResources.js'
+
 defineProps({
   show: Boolean,
   resourceLimits: {

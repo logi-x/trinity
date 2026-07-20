@@ -119,6 +119,35 @@ asyncio.run(main())
 "
 ```
 
+```bash
+
+# custom images
+docker exec trinity-backend python3 -c "
+import asyncio
+from services.docker_service import get_agent_container
+from services.agent_service.lifecycle import recreate_container_with_updated_config
+
+# agent_name -> NEW image tag after your custom rebuild
+IMAGE = {
+    'howa':    'trinity-agent-base:howa-php84-0.8.3',
+    'experts': 'trinity-agent-base:experts-node26-0.8.3'
+}
+
+async def main():
+    for name, image in IMAGE.items():
+        c = get_agent_container(name)
+        if not c:
+            print('skip (not found):', name)
+            continue
+        # Pin new image before recreate (recreate reads Config.Image from attrs)
+        c.attrs.setdefault('Config', {})['Image'] = image
+        await recreate_container_with_updated_config(name, c, 'system')
+        print('recreated', name, '->', image)
+
+asyncio.run(main())
+"
+```
+
 UI **Stop → Start is not enough** — Docker keeps the old image ID until the container is recreated. After recreate, `.trinity/setup.sh` rebuilds the FAISS venv if Python changed.
 
 Verify:

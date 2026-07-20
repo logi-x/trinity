@@ -103,6 +103,55 @@ def _mcp_vars(snap: Dict[str, Any]) -> List[str]:
     return sorted(set(_VAR_RE.findall(content)))
 
 
+def _credential_vars_listed(creds: Any) -> set:
+    """Var names declared in template.yaml `credentials` (canonical shape).
+
+    Canonical form (agent.schema.yaml / CRED-002):
+      credentials:
+        mcp_servers:
+          server:
+            env_vars: [VAR]
+        env_file: [VAR]
+
+    Legacy forms still accepted for older templates:
+      - top-level keys that look like ENV vars (ELU_API_KEY: …)
+      - list of strings or {name: …} objects
+    """
+    listed: set = set()
+    if isinstance(creds, list):
+        for c in creds:
+            if isinstance(c, dict) and c.get("name"):
+                listed.add(c["name"])
+            elif isinstance(c, str):
+                listed.add(c)
+        return listed
+    if not isinstance(creds, dict):
+        return listed
+
+    mcp = creds.get("mcp_servers")
+    if isinstance(mcp, dict):
+        for server_cfg in mcp.values():
+            if isinstance(server_cfg, dict):
+                for var in server_cfg.get("env_vars") or []:
+                    if isinstance(var, str) and var:
+                        listed.add(var)
+
+    env_file = creds.get("env_file")
+    if isinstance(env_file, list):
+        for var in env_file:
+            if isinstance(var, str) and var:
+                listed.add(var)
+
+    # Legacy: bare ENV-style keys at credentials top level (pre-schema cleanup)
+    for key in creds:
+        if key in ("mcp_servers", "env_file"):
+            continue
+        if isinstance(key, str) and re.match(r"^[A-Z][A-Z0-9_]*$", key):
+            listed.add(key)
+
+    return listed
+
+
 def _mcp_server_names(snap: Dict[str, Any]) -> List[str]:
     content = _content(snap, ".mcp.json.template")
     if not content:
@@ -500,16 +549,7 @@ def c_t015(snap):
         mcp_vars = set(_mcp_vars(snap))
         if not mcp_vars:
             return _ok("no MCP credential variables")
-        creds = d.get("credentials") or {}
-        listed = set()
-        if isinstance(creds, dict):
-            listed = set(creds.keys())
-        elif isinstance(creds, list):
-            for c in creds:
-                if isinstance(c, dict) and c.get("name"):
-                    listed.add(c["name"])
-                elif isinstance(c, str):
-                    listed.add(c)
+        listed = _credential_vars_listed(d.get("credentials"))
         missing = sorted(v for v in mcp_vars if v not in listed and not _is_platform_injected(v))
         if missing:
             return _fail("MCP ${VAR}s not listed in template.yaml credentials", {"missing": missing})

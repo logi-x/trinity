@@ -276,7 +276,9 @@ If present, must not be generic ("AI-powered assistant", "Smart agent"). Should 
 
 **T-015** — All MCP credential variables listed in `credentials` schema  
 Severity: SOFT | Type: STATIC  
-Extract all `${VAR}` from `.mcp.json.template`; verify each appears in `template.yaml credentials`.
+Extract all `${VAR}` from `.mcp.json.template`; verify each appears in
+`template.yaml` under `credentials.mcp_servers.*.env_vars` or
+`credentials.env_file` (canonical CRED-002 shape).
 
 **T-016** — Schedule messages reference existing commands  
 Severity: SOFT | Type: STATIC  
