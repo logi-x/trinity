@@ -103,8 +103,6 @@ from services.agent_service.lifecycle import recreate_container_with_updated_con
 names = [
     'logix-system',
     'cornelius',
-    'experts',
-    'howa',
     'atlas',
 ]
 async def main():

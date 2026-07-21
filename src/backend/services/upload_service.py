@@ -54,10 +54,49 @@ UPLOAD_BASE = "/home/developer/uploads"
 _FILENAME_MAX_LENGTH = 200
 _FILENAME_SAFE_CHARS_RE = re.compile(r'[^\w.\-()]')
 
+# Declared vs magic-detected MIME may differ for the same payload (Slack labels
+# .txt while libmagic sees JSON, or the reverse). Treat these as one family.
+_STRUCTURED_TEXT_EXACT = frozenset({
+    "application/json",
+    "application/ld+json",
+    "application/xml",
+    "text/xml",
+    "application/yaml",
+    "text/yaml",
+    "application/x-yaml",
+})
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _normalize_mime(mimetype: str) -> str:
+    return (mimetype or "application/octet-stream").split(";", 1)[0].strip().lower()
+
+
+def _is_structured_text_mime(mimetype: str) -> bool:
+    m = _normalize_mime(mimetype)
+    if m.startswith("text/"):
+        return True
+    if m in _STRUCTURED_TEXT_EXACT or m.endswith("+json"):
+        return True
+    return False
+
+
+def _upload_mimes_compatible(declared: str, detected: str) -> bool:
+    """True when declared and sniffed types are close enough to accept the upload."""
+    d_decl = _normalize_mime(declared)
+    d_det = _normalize_mime(detected)
+    if d_decl == d_det:
+        return True
+    if d_decl.startswith("image/") and d_det.startswith("image/"):
+        return True
+    if _is_structured_text_mime(d_decl) and _is_structured_text_mime(d_det):
+        return True
+    if d_decl == "application/octet-stream" and _is_structured_text_mime(d_det):
+        return True
+    return False
 
 def sanitize_filename(name: str, file_id: str, used_names: set) -> str:
     """
@@ -206,17 +245,16 @@ async def process_file_uploads(
                 detected_is_image = detected_mime.startswith("image/")
 
                 if detected_mime != mimetype:
-                    if declared_is_image and detected_is_image:
-                        # JPEG vs PNG mislabel — both images, accept with detected MIME
+                    if _upload_mimes_compatible(mimetype, detected_mime):
+                        if declared_is_image or detected_is_image:
+                            actual_mime = detected_mime
+                            is_image = detected_is_image
+                        else:
+                            actual_mime = detected_mime
                         logger.debug(
-                            f"[UPLOAD] Image MIME mismatch {safe_name}: "
+                            f"[UPLOAD] MIME relabel {safe_name}: "
                             f"declared={mimetype}, detected={detected_mime} (allowing)"
                         )
-                        actual_mime = detected_mime
-                        is_image = True
-                    elif mimetype.startswith("text/") and detected_mime.startswith("text/"):
-                        # text/plain vs text/csv — both text, accept
-                        actual_mime = detected_mime
                     else:
                         logger.warning(
                             f"[UPLOAD] MIME mismatch for {safe_name}: "

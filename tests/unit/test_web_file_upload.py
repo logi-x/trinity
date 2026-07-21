@@ -236,3 +236,45 @@ class TestProcessFileUploads:
                 )
         combined = " ".join(descs)
         assert "skipped" in combined or "more file" in combined
+
+
+class TestUploadMimeCompatibility:
+    def test_text_plain_vs_application_json(self):
+        assert _svc._upload_mimes_compatible("text/plain", "application/json")
+
+    def test_application_json_vs_text_plain(self):
+        assert _svc._upload_mimes_compatible("application/json", "text/plain")
+
+    def test_octet_stream_vs_json(self):
+        assert _svc._upload_mimes_compatible("application/octet-stream", "application/json")
+
+    def test_pdf_vs_text_rejected(self):
+        assert not _svc._upload_mimes_compatible("application/pdf", "text/plain")
+
+    @pytest.mark.asyncio
+    async def test_slack_json_txt_mismatch_accepted(self):
+        """Slack text/plain + magic application/json (Postman collection, etc.)."""
+        container = MagicMock()
+        json_bytes = b'{"info": {"name": "My Collection"}}'
+        mock_magic = MagicMock()
+        mock_magic.from_buffer.return_value = "application/json"
+        helper = ProcessFileUploadsTest()
+        raw_file = helper._make_raw(
+            name="collection.txt",
+            mimetype="text/plain",
+            data=json_bytes,
+        )
+        with patch.object(_svc, "_MAGIC_AVAILABLE", True):
+            with patch.object(_svc, "magic", mock_magic, create=True):
+                with patch.object(_svc, "container_exec_run", new=AsyncMock(return_value=(0, b""))):
+                    with patch.object(_svc, "container_put_archive", new=AsyncMock(return_value=True)):
+                        descs, udir, failed, _imgs = await _svc.process_file_uploads(
+                            raw_files=[raw_file],
+                            agent_name="a",
+                            container=container,
+                            session_id="s1",
+                            uploader="u",
+                        )
+        assert udir is not None
+        assert not any("file type mismatch" in d for d in descs)
+        assert not failed

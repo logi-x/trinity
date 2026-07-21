@@ -65,14 +65,14 @@ else
     TIMEZONE='UTC'
 fi
 APP_ENV=${APP_ENV:-'development'}
-APP_VERSION=$APP_VERSION
-APP_NAME='Experts App'
+VERSION=$TRINITY_BASE_VERSION
+APP_NAME=$AGENT_NAME
 
 echo -e "${BLUE}$(cat /etc/.bash/ascii.art)${NC}"
 
 echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ '
 echo ''
-echo " $APP_NAME v$APP_VERSION - $APP_ENV | by Logix, Inc.         "
+echo " $APP_NAME v$VERSION - $APP_ENV | by Logix, Inc.         "
 echo ''
 echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ '
 echo ''

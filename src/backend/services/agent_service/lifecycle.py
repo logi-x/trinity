@@ -600,6 +600,10 @@ async def recreate_container_with_updated_config(agent_name: str, old_container,
 
         volumes[public_volume_name] = {'bind': db.get_public_mount_path(), 'mode': 'rw'}
 
+    # Image-baked env (Dockerfile ENV) must come from the new image, not the
+    # old container — otherwise TRINITY_BASE_VERSION stays pinned across base bumps.
+    env_vars.pop("TRINITY_BASE_VERSION", None)
+
     # Create new container with security settings
     # Security principle: ALWAYS apply baseline security, even in full_capabilities mode
     # - Always drop ALL caps, then add back only what's needed

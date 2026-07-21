@@ -9,7 +9,8 @@ ARG VERSION=latest
 LABEL trinity.base-image-version="${VERSION}"
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=America/New_York
+# Default TZ; overridden below when mounts/etc/timezone is installed (Asia/Riyadh).
+ENV TZ=Asia/Riyadh
 ENV TRINITY_BASE_VERSION="${VERSION}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,11 +23,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     apt-transport-https \
     ca-certificates \
+    procps \
+    locales \
+    iproute2 \
+    grep \
+    findutils \
+    coreutils \
     gnupg \
     lsb-release \
     sudo \
     openssh-server \
     jq \
+    zip \
     unzip \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
@@ -149,6 +157,33 @@ RUN mkdir -p /tmp/secure && \
 # so it survives a plain stop+start but is wiped on recreate.
 RUN mkdir -p /var/lib/trinity && \
     chown developer:developer /var/lib/trinity
+
+# ---------------------------------------------------------------------------
+# Shared host-style mounts baked into EVERY agent image (not compose binds).
+# Source: docker/base-image/mounts/ — /etc paths survive workspace volume mounts;
+# /home/developer/.bashrc is volume-masked, so we also hook /etc/profile,
+# /etc/bash.bashrc, and startup.sh (idempotent append on the volume).
+# ---------------------------------------------------------------------------
+COPY ./mounts/etc/.bash /etc/.bash
+COPY ./mounts/etc/profile.d/ /etc/profile.d/
+COPY ./mounts/etc/timezone /etc/timezone
+
+# RUN echo '. /etc/.bash/logix.env.sh' >> /home/developer/.bashrc
+
+RUN TZ_NAME="$(tr -d '[:space:]' </etc/timezone)" && \
+    ln -sfn "/usr/share/zoneinfo/${TZ_NAME}" /etc/localtime && \
+    chmod 0644 /etc/timezone && \
+    chmod 0755 /etc/profile.d/*.sh /etc/.bash/*.sh 2>/dev/null || true && \
+    chmod 0644 /etc/.bash/ascii.art /etc/.bash/.bashrc 2>/dev/null || true && \
+    # printf '\n# Trinity / Logix shared env (docker/base-image/mounts)\n[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh\n' \
+    #   >> /etc/profile && \
+    # printf '\n# Trinity / Logix shared env (docker/base-image/mounts)\n[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh\n' \
+    #   >> /etc/bash.bashrc && \
+    # echo '[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh' >> /root/.bashrc && \
+    # echo '[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh' >> /etc/skel/.bashrc && \
+    # Seed image home (masked by workspace volume at runtime; startup.sh re-applies).
+    echo '[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh' >> /home/developer/.bashrc && \
+    chown developer:developer /home/developer/.bashrc
 
 USER developer
 

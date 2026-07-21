@@ -1,0 +1,45 @@
+#!/bin/bash
+
+set -e
+
+cd "$(dirname "$0")/../.."
+
+# Read version from VERSION file
+VERSION=$(cat VERSION 2>/dev/null || echo "latest")
+VERSION=$(echo "$VERSION" | tr -d '[:space:]')
+
+echo "====================================="
+echo "Building Trinity Agent Base Image"
+echo "Version: $VERSION"
+echo "====================================="
+echo ""
+
+# Build with version tag and latest tag
+docker build \
+    -t trinity-agent-base:${VERSION} \
+    -t trinity-agent-base:latest \
+    --build-arg VERSION=${VERSION} \
+    -f docker/base-image/Dockerfile docker/base-image/
+
+cd /home/logix/experts && \
+docker build \
+    -f docker/trinity-agent/Dockerfile \
+    --build-arg VERSION=${VERSION} \
+    -t trinity-agent-base:experts-node26-${VERSION} \
+    .
+
+cd /home/logix/howa && \
+docker build \
+    -f docker/trinity-agent/Dockerfile \
+    --build-arg VERSION=${VERSION} \
+    -t trinity-agent-base:howa-php84-${VERSION} \
+    .
+
+echo ""
+echo "✅ Base image built successfully:"
+echo "   - trinity-agent-base:${VERSION}"
+echo "   - trinity-agent-base:latest"
+echo "   - trinity-agent-base:experts-node26-${VERSION}"
+echo "   - trinity-agent-base:howa-php84-${VERSION}"
+echo ""
+

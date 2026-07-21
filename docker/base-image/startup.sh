@@ -22,6 +22,16 @@ AGENT_TMPDIR="${TMPDIR:-/home/developer/.tmp}"
 mkdir -p "${AGENT_TMPDIR}" 2>/dev/null && chmod 700 "${AGENT_TMPDIR}" 2>/dev/null || \
     echo "Warning: could not create TMPDIR ${AGENT_TMPDIR}; scratch will fall back to /tmp"
 
+# === Shared Logix/Trinity shell env (baked at /etc/.bash in the base image) ===
+# /home/developer is a named volume, so the image's ~/.bashrc is masked. Ensure
+# interactive SSH shells still source logix.env.sh without clobbering a custom rc.
+if [ -f /etc/.bash/logix.env.sh ]; then
+    if [ ! -f /home/developer/.bashrc ] || ! grep -qF '/etc/.bash/logix.env.sh' /home/developer/.bashrc 2>/dev/null; then
+        printf '\n# Trinity shared env (docker/base-image/mounts)\n[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh\n' \
+            >> /home/developer/.bashrc
+    fi
+fi
+
 # A restart already has a complete workspace. Refreshing remote refs is useful,
 # but it must not hold the internal API offline when GitHub is slow or
 # unreachable. Bound the fetch and let the rest of startup continue.

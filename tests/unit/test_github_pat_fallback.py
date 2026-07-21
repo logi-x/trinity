@@ -240,3 +240,11 @@ class TestCallsiteStaticCheck:
         assert "get_github_pat_for_agent" in block
         # Platform-only call must NOT be in this block
         assert "= get_github_pat()" not in block
+
+    def test_recreate_drops_trinity_base_version_before_run(self):
+        """Stale TRINITY_BASE_VERSION must not be copied from the old container."""
+        src = self._read("services/agent_service/lifecycle.py")
+        run_idx = src.find("new_container = await containers_run(")
+        assert run_idx != -1
+        prelude = src[max(0, run_idx - 400):run_idx]
+        assert 'env_vars.pop("TRINITY_BASE_VERSION", None)' in prelude
