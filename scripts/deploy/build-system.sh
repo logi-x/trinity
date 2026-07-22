@@ -25,21 +25,21 @@ cd /home/logix/experts && \
 docker build \
     -f docker/trinity-agent/Dockerfile \
     --build-arg VERSION=${VERSION} \
-    -t trinity-agent-base:experts-node26-${VERSION} \
+    -t trinity-agent-base:experts-${VERSION} \
     .
 
 cd /home/logix/howa && \
 docker build \
     -f docker/trinity-agent/Dockerfile \
     --build-arg VERSION=${VERSION} \
-    -t trinity-agent-base:howa-php84-${VERSION} \
+    -t trinity-agent-base:howa-${VERSION} \
     .
 
 echo ""
 echo "✅ Base image built successfully:"
 echo "   - trinity-agent-base:${VERSION}"
 echo "   - trinity-agent-base:latest"
-echo "   - trinity-agent-base:experts-node26-${VERSION}"
-echo "   - trinity-agent-base:howa-php84-${VERSION}"
+echo "   - trinity-agent-base:experts-${VERSION}"
+echo "   - trinity-agent-base:howa-${VERSION}"
 echo ""
 

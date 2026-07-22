@@ -101,6 +101,7 @@ export EDITOR=nano
 
 # 🌐 Locale configuration
 export LANG=en_US.UTF-8
+export TZ=Asia/Riyadh
 
 # 📦 Development configuration
 export TURBO_TELEMETRY_DISABLED=1
@@ -134,4 +135,8 @@ export LD_LIBRARY_PATH
 # export PATH=/opt/php/usr/local/bin:/opt/php/usr/bin:/opt/node/usr/local/bin:/opt/node/usr/bin:/opt/java/openjdk/bin:/opt/chromium/bin:/opt/ffmpeg/usr/bin:/opt/ffmpeg/usr/libexec:/opt/zatca-sdk/Apps:/opt/zatca-sdk/usr/bin:$PATH
 # export PATH=$PATH
 
-. /etc/.bash/utils.sh
+# . /etc/.bash/utils.sh
+
+# GitHub auth for interactive shells: export GH_TOKEN (App bot token, else
+# GITHUB_PAT). Non-interactive shells get this via ENV BASH_ENV=/etc/.bash/gh-env.sh.
+[ -f /etc/.bash/gh-env.sh ] && . /etc/.bash/gh-env.sh

@@ -2,6 +2,17 @@
 # slim). This eliminates the dependency on ppa:deadsnakes/ppa, which has
 # no SLA and historically blocked deployment of critical agent-runtime
 # fixes for days at a time when the PPA was unreachable. See #658.
+
+# --- Toolchain source stages (copied into the Python base below) ---
+# Node 26.5.0 from the official slim image — replaces the NodeSource setup_20.x
+# apt install so the whole fleet runs the same Node major as the host and every
+# app (experts + howa are both on 26.5.0). Pinned by digest for reproducibility.
+FROM node:26.5.0-bookworm-slim@sha256:e999d087492c7227c85adc70574cf9d3cce774c3e6d7b8dfe473ee6b142c8f2c AS node-src
+
+# Composer from the official image — PHP dependency manager copied in below so
+# howa no longer needs its own composer overlay.
+FROM composer:2.10.2 AS composer
+
 FROM python:3.14-slim-bookworm
 
 # Version tracking - set at build time via --build-arg VERSION=x.y.z
@@ -39,9 +50,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    rm -rf /var/lib/apt/lists/*
+# Node 26.5.0 overlaid from the official slim image. Copying /usr/local/ merges
+# node/npm/npx/corepack into the Python base without disturbing Python (which
+# also lives under /usr/local — the trees don't collide). pnpm@latest is the
+# fleet-standard package manager; experts/howa no longer install their own.
+COPY --from=node-src /usr/local/ /usr/local/
+RUN npm install -g pnpm@latest && \
+    node --version && npm --version && pnpm --version
 
 RUN wget -q https://go.dev/dl/go1.23.4.linux-amd64.tar.gz && \
     tar -C /usr/local -xzf go1.23.4.linux-amd64.tar.gz && \
@@ -53,6 +68,34 @@ RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /
     apt-get update && \
     apt-get install -y --no-install-recommends docker-ce-cli && \
     rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI (gh) from the vendored .deb. Previously installed per-agent by
+# .trinity/setup.sh on every container start; baking it here makes it durable
+# across recreate and available to non-interactive (BASH_ENV) shells too.
+COPY ./packages/gh_2.96.0_linux_amd64.deb /tmp/gh.deb
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends /tmp/gh.deb && \
+    rm -f /tmp/gh.deb && \
+    rm -rf /var/lib/apt/lists/* && \
+    gh --version
+
+# PHP 8.5 (Sury) + Composer — lifted from howa's per-agent overlay so the whole
+# fleet shares one PHP toolchain (howa's apps now target 8.5). Note: 8.5 has no
+# separate php8.5-opcache package (unlike 8.4) — Zend OPcache is bundled into
+# php8.5-cli/php8.5-common, so it is not listed here.
+COPY --from=composer /usr/bin/composer /usr/local/bin/composer
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl lsb-release && \
+    curl -fsSLo /tmp/debsuryorg-archive-keyring.deb https://packages.sury.org/debsuryorg-archive-keyring.deb && \
+    dpkg -i /tmp/debsuryorg-archive-keyring.deb && \
+    echo "deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" \
+        > /etc/apt/sources.list.d/php.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        php8.5-cli php8.5-bcmath php8.5-curl php8.5-gd php8.5-intl php8.5-mbstring \
+        php8.5-mysql php8.5-readline php8.5-sqlite3 php8.5-xml php8.5-zip && \
+    rm -rf /var/lib/apt/lists/* /tmp/debsuryorg-archive-keyring.deb && \
+    php --version && composer --version
 
 RUN npm install -g @anthropic-ai/claude-code@latest
 
@@ -168,6 +211,15 @@ COPY ./mounts/etc/.bash /etc/.bash
 COPY ./mounts/etc/profile.d/ /etc/profile.d/
 COPY ./mounts/etc/timezone /etc/timezone
 
+# Generic GitHub App token minter (fleet-wide; App ID / Installation ID / key
+# come from each agent's env, no per-agent defaults). gh-env.sh (in /etc/.bash/)
+# calls it to export GH_TOKEN. BASH_ENV makes non-interactive shells — e.g.
+# scheduled agent loops and `bash -c ...` — source gh-env.sh too, closing the
+# .bashrc-only gap that left loops running gh unauthenticated.
+COPY ./mounts/usr/local/bin/gh-app-token /usr/local/bin/gh-app-token
+RUN chmod 0555 /usr/local/bin/gh-app-token
+ENV BASH_ENV=/etc/.bash/gh-env.sh
+
 # RUN echo '. /etc/.bash/logix.env.sh' >> /home/developer/.bashrc
 
 RUN TZ_NAME="$(tr -d '[:space:]' </etc/timezone)" && \
@@ -175,6 +227,14 @@ RUN TZ_NAME="$(tr -d '[:space:]' </etc/timezone)" && \
     chmod 0644 /etc/timezone && \
     chmod 0755 /etc/profile.d/*.sh /etc/.bash/*.sh 2>/dev/null || true && \
     chmod 0644 /etc/.bash/ascii.art /etc/.bash/.bashrc 2>/dev/null || true && \
+
+    echo '[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh' >> /home/developer/.bashrc && \
+    chown developer:developer /home/developer/.bashrc
+
+USER developer
+
+CMD ["/app/startup.sh"]
+
     # printf '\n# Trinity / Logix shared env (docker/base-image/mounts)\n[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh\n' \
     #   >> /etc/profile && \
     # printf '\n# Trinity / Logix shared env (docker/base-image/mounts)\n[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh\n' \
@@ -182,9 +242,3 @@ RUN TZ_NAME="$(tr -d '[:space:]' </etc/timezone)" && \
     # echo '[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh' >> /root/.bashrc && \
     # echo '[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh' >> /etc/skel/.bashrc && \
     # Seed image home (masked by workspace volume at runtime; startup.sh re-applies).
-    echo '[ -f /etc/.bash/logix.env.sh ] && . /etc/.bash/logix.env.sh' >> /home/developer/.bashrc && \
-    chown developer:developer /home/developer/.bashrc
-
-USER developer
-
-CMD ["/app/startup.sh"]

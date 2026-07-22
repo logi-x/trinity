@@ -25,8 +25,8 @@ IMAGE = {
     'logix-system': 'trinity-agent-base:${VERSION}',
     'cornelius': 'trinity-agent-base:${VERSION}',
     'atlas': 'trinity-agent-base:${VERSION}',
-    'howa':    'trinity-agent-base:howa-php84-${VERSION}',
-    'experts': 'trinity-agent-base:experts-node26-${VERSION}'
+    'howa':    'trinity-agent-base:howa-${VERSION}',
+    'experts': 'trinity-agent-base:experts-${VERSION}'
 }
 
 async def main():
@@ -48,7 +48,7 @@ echo "✅ Containers restarted successfully:"
 echo "   - logix-system-${VERSION}"
 echo "   - cornelius-${VERSION}"
 echo "   - atlas-${VERSION}"
-echo "   - experts-node26-${VERSION}"
-echo "   - howa-php84-${VERSION}"
+echo "   - experts-${VERSION}"
+echo "   - howa-${VERSION}"
 echo ""
 

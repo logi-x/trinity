@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Mint a short-lived GitHub App installation token so gh authors as the agent's
+# App bot (e.g. agent-<name>[bot]). Generic / fleet-wide: the App ID, the
+# Installation ID, and the private key all come from the environment (or the
+# persisted ~/.env) — there are NO per-agent defaults. When the required config
+# is absent, exit non-zero *quietly* so the caller (gh-env.sh) falls back to
+# GITHUB_PAT.
+#
+# Required (per-agent, set in the agent's .env — the IDs are NOT secret):
+#   GH_APP_ID, GH_APP_INSTALLATION_ID
+# Private key, resolved in this order:
+#   GH_APP_PEM       path to the .pem
+#   GH_APP_PEM_B64   base64 of the .pem (from env, else the persisted ~/.env;
+#                    survives container/image recreate, unlike a loose file)
+#   a *.pem under ~/.trinity/ or ~
+set -euo pipefail
+
+APP_ID="${GH_APP_ID:-}"
+INST_ID="${GH_APP_INSTALLATION_ID:-}"
+# No App credentials configured for this agent → signal the caller to use the PAT.
+[ -n "$APP_ID" ] && [ -n "$INST_ID" ] || exit 1
+
+PEM="${GH_APP_PEM:-}"
+_pem_b64="${GH_APP_PEM_B64:-}"
+# When read from ~/.env the value may be quoted, CRLF-terminated, or space-padded
+# (dotenv conventions); base64's alphabet is [A-Za-z0-9+/=], so keep only those
+# chars before decoding.
+[ -z "$_pem_b64" ] && [ -f "$HOME/.env" ] && \
+  _pem_b64="$(grep -E '^GH_APP_PEM_B64=' "$HOME/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -cd 'A-Za-z0-9+/=')"
+# Clean up the decoded key on exit — only ever the temp created below, never a
+# real key file resolved by the glob search. Armed before decoding so no early
+# exit (e.g. a cache hit) can leak it.
+_pem_tmp=""
+trap '[ -n "${_pem_tmp:-}" ] && rm -f "$_pem_tmp" 2>/dev/null; true' EXIT
+if { [ -z "$PEM" ] || [ ! -f "$PEM" ]; } && [ -n "$_pem_b64" ]; then
+  _pem_tmp="$(mktemp)"
+  if printf '%s' "$_pem_b64" | base64 -d > "$_pem_tmp" 2>/dev/null && grep -q 'PRIVATE KEY' "$_pem_tmp"; then
+    chmod 600 "$_pem_tmp"; PEM="$_pem_tmp"
+  else
+    # Present but unusable (corrupt/truncated). Surface a script-authored signal
+    # instead of a swallowed openssl error later, and fall through to the search.
+    echo "gh-app-token: GH_APP_PEM_B64 present but did not decode to a private key; trying key file" >&2
+    rm -f "$_pem_tmp"; _pem_tmp=""
+  fi
+fi
+unset _pem_b64
+if [ -z "$PEM" ] || [ ! -f "$PEM" ]; then
+  for _p in "$HOME"/.trinity/*.pem "$HOME"/*.pem; do
+    [ -f "$_p" ] && { PEM="$_p"; break; }
+  done
+fi
+
+CACHE="${GH_APP_TOKEN_CACHE:-/tmp/.gh-app-token-$APP_ID-$INST_ID}"
+if [ -f "$CACHE" ]; then
+  exp=$(sed -n '1p' "$CACHE" 2>/dev/null || true); tok=$(sed -n '2p' "$CACHE" 2>/dev/null || true)
+  now=$(date +%s)
+  # Trust the cache only when expiry is a plain integer — a torn/partial
+  # concurrent write must trigger a re-mint, not a set -e arithmetic abort.
+  if [ -n "${exp:-}" ] && [ -n "${tok:-}" ] && [[ "$exp" =~ ^[0-9]+$ ]] && [ $((exp - now)) -gt 300 ]; then
+    printf '%s' "$tok"; exit 0
+  fi
+fi
+
+[ -f "$PEM" ] || { echo "gh-app-token: private key not found (set GH_APP_PEM_B64 or place a .pem under ~/.trinity)" >&2; exit 1; }
+b64url(){ openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+now=$(date +%s); iat=$((now-60)); jexp=$((now+540))
+header=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
+payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$iat" "$jexp" "$APP_ID" | b64url)
+unsigned="$header.$payload"
+sig=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$PEM" | b64url)
+jwt="$unsigned.$sig"
+resp=$(curl -s -X POST -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/app/installations/$INST_ID/access_tokens")
+tok=$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
+[ -n "$tok" ] || { echo "gh-app-token: mint failed: $resp" >&2; exit 1; }
+# Atomic cache write: a plain redirect can interleave when multiple subagents
+# mint at once, leaving a torn line for the next reader. Write a temp in the
+# same dir, then rename.
+_cache_tmp="$(mktemp "${CACHE}.XXXXXX" 2>/dev/null || mktemp)"
+printf '%s\n%s\n' "$((now+3600))" "$tok" > "$_cache_tmp"; chmod 600 "$_cache_tmp"; mv -f "$_cache_tmp" "$CACHE"
+printf '%s' "$tok"
