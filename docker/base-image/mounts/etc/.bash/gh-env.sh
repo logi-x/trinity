@@ -18,7 +18,7 @@ if [ -z "${GH_TOKEN:-}" ]; then
   # First runnable minter wins: a repo-local script (agent-specific overrides),
   # then the generic fleet minter baked into the base image.
   _ghmint=""
-  for _c in "$HOME/ops/fleet/lib/gh-app-token.sh" "/usr/local/bin/gh-app-token" "$HOME/.trinity/gh-app-token.sh"; do
+  for _c in "$HOME/scripts/gh-app-token.sh" "/usr/local/bin/gh-app-token" "$HOME/.trinity/gh-app-token.sh"; do
     [ -x "$_c" ] && { _ghmint="$_c"; break; }
   done
   if [ -n "$_ghmint" ]; then
